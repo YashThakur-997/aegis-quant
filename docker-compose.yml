@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:alpine
+    container_name: aegis-redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: aegis-postgres
+    environment:
+      POSTGRES_USER: aegis_user
+      POSTGRES_PASSWORD: aegis_password
+      POSTGRES_DB: aegis_quant_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: always
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: aegis-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+      - ALPACA_BASE_URL=https://paper-api.alpaca.markets
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=${DATABASE_URL}
+    depends_on:
+      - redis
+      - postgres
+    restart: always
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    container_name: aegis-dashboard
+    ports:
+      - "3001:3000"
+    depends_on:
+      - backend
+    restart: always
+
+volumes:
+  pgdata:

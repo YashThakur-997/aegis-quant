@@ -1,0 +1,19 @@
+fastapi==0.110.0
+uvicorn==0.28.0
+pydantic==2.6.4
+redis==5.0.2
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.28
+langgraph==0.0.26
+langchain-groq
+pandas==1.5.3
+numpy==1.23.5
+numba==0.56.4
+plotly==5.18.0
+vectorbt==0.26.2
+alpaca-py
+hmmlearn==0.3.2
+# ta-lib==0.4.28
+python-dotenv==1.0.1
+requests==2.31.0
+websockets==12.0
