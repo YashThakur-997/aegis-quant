@@ -1,7 +1,12 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
+import { toast } from "sonner";
 
+import BacktestChart from "@/components/BacktestChart";
+import PipelineProgress, {
+  PIPELINE_STEPS,
+} from "@/components/PipelineProgress";
 import {
   analyzeTicker,
   buildHistoricalData,
@@ -97,8 +102,63 @@ export default function TradeEvaluatorForm() {
   const [manualNews, setManualNews] = useState("");
   const [manualEquity, setManualEquity] = useState("10000");
   const [submitting, setSubmitting] = useState(false);
+  const [activeStep, setActiveStep] = useState(0);
   const [error, setError] = useState("");
   const [result, setResult] = useState<EvaluateResponse | null>(null);
+
+  useEffect(() => {
+    if (!submitting) {
+      setActiveStep(0);
+      return;
+    }
+
+    setActiveStep(0);
+    const interval = window.setInterval(() => {
+      setActiveStep((step) =>
+        step < PIPELINE_STEPS.length - 1 ? step + 1 : step
+      );
+    }, 1100);
+
+    return () => window.clearInterval(interval);
+  }, [submitting]);
+
+  function notifyOutcome(response: EvaluateResponse) {
+    const symbol = response.data_context?.ticker ?? ticker;
+    const direction = response.trade_signal?.direction ?? "HOLD";
+
+    if (response.status === "SUCCESS" || response.status === "EXECUTED") {
+      toast.success(`${symbol} ${direction} submitted`, {
+        description: `Broker status ${response.status} · paper account`,
+      });
+    } else if (response.status === "DRY_RUN") {
+      toast.info(`${symbol} · ${direction} (dry run)`, {
+        description: "Decision journaled. No order was sent.",
+      });
+    } else if (response.status === "HOLD") {
+      toast.info(`${symbol} · holding`, {
+        description: "Agent consensus was to stand down.",
+      });
+    }
+  }
+
+  function notifyError(requestError: unknown, fallback: string) {
+    const message =
+      requestError instanceof Error ? requestError.message : fallback;
+    setError(message);
+
+    const lowered = message.toLowerCase();
+    if (
+      lowered.includes("circuit breaker") ||
+      lowered.includes("kill switch") ||
+      lowered.includes("kill-switch")
+    ) {
+      toast.error("Kill-switch engaged", {
+        description: "Trading is halted. Reset the breaker to continue.",
+      });
+    } else {
+      toast.error("Evaluation failed", { description: message });
+    }
+  }
 
   async function runAgent(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -114,13 +174,11 @@ export default function TradeEvaluatorForm() {
     setResult(null);
 
     try {
-      setResult(await analyzeTicker(symbol, dryRun));
+      const response = await analyzeTicker(symbol, dryRun);
+      setResult(response);
+      notifyOutcome(response);
     } catch (requestError) {
-      setError(
-        requestError instanceof Error
-          ? requestError.message
-          : "Agent run failed."
-      );
+      notifyError(requestError, "Agent run failed.");
     } finally {
       setSubmitting(false);
     }
@@ -150,21 +208,17 @@ export default function TradeEvaluatorForm() {
     setResult(null);
 
     try {
-      setResult(
-        await evaluateTrade({
-          ticker: symbol,
-          news_summary: manualNews.trim(),
-          current_equity: equityValue,
-          current_daily_pnl: 0,
-          historical_data: buildHistoricalData(symbol, 120),
-        })
-      );
+      const response = await evaluateTrade({
+        ticker: symbol,
+        news_summary: manualNews.trim(),
+        current_equity: equityValue,
+        current_daily_pnl: 0,
+        historical_data: buildHistoricalData(symbol, 120),
+      });
+      setResult(response);
+      notifyOutcome(response);
     } catch (requestError) {
-      setError(
-        requestError instanceof Error
-          ? requestError.message
-          : "Trade evaluation failed."
-      );
+      notifyError(requestError, "Trade evaluation failed.");
     } finally {
       setSubmitting(false);
     }
@@ -176,7 +230,7 @@ export default function TradeEvaluatorForm() {
   const execution = result?.broker_execution;
 
   return (
-    <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+    <section className="glass-panel p-4 sm:p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-xs font-semibold text-amber-500">
@@ -246,12 +300,18 @@ export default function TradeEvaluatorForm() {
           <button
             type="submit"
             disabled={submitting}
-            className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-5 py-2.5 text-sm font-medium text-zinc-950 transition-colors hover:bg-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-100 px-5 py-2.5 text-sm font-medium text-zinc-950 transition-colors hover:bg-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
           >
             {submitting ? "Running evaluation…" : "Run evaluation"}
           </button>
         </div>
       </form>
+
+      {submitting ? (
+        <div className="mt-5">
+          <PipelineProgress activeStep={activeStep} />
+        </div>
+      ) : null}
 
       <details className="mt-5 rounded-xl border border-zinc-800 bg-zinc-950/40">
         <summary className="cursor-pointer select-none px-4 py-3 text-xs font-medium text-zinc-400 transition-colors hover:text-zinc-200">
@@ -305,7 +365,7 @@ export default function TradeEvaluatorForm() {
           <button
             type="submit"
             disabled={submitting}
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm font-semibold text-zinc-100 transition-colors hover:bg-zinc-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm font-semibold text-zinc-100 transition-colors hover:bg-zinc-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
           >
             {submitting ? "Evaluating…" : "Evaluate with synthetic data"}
           </button>
@@ -440,6 +500,9 @@ export default function TradeEvaluatorForm() {
                   label="Max Drawdown"
                   value={formatPercent(report.strategy_max_drawdown_pct)}
                 />
+              </div>
+              <div className="mt-4">
+                <BacktestChart report={report} />
               </div>
             </div>
           ) : null}

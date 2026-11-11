@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import ScannerSettings from "@/components/ScannerSettings";
 import {
   fetchScanStatus,
   formatTimestamp,
@@ -108,7 +109,7 @@ export default function ScannerStatus() {
   const lastScan = status?.last_scan ?? null;
 
   return (
-    <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+    <section className="glass-panel p-4 sm:p-6">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -183,7 +184,7 @@ export default function ScannerStatus() {
             ))}
           </div>
 
-          <p className="mt-2 text-xs text-zinc-500">
+          <p className="mt-2 font-mono text-xs text-zinc-500">
             Batch {status.batch_index}/{status.batch_count} ·{" "}
             {status.universe_size}-symbol universe · rotates each sweep
           </p>
@@ -238,6 +239,8 @@ export default function ScannerStatus() {
               </p>
             ) : null}
           </div>
+
+          <ScannerSettings onSaved={() => void load(false)} />
         </>
       ) : null}
     </section>

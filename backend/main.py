@@ -2,10 +2,12 @@ import json
 import logging
 import math
 import time
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.core.market_data import AlpacaMarketData, AlpacaMarketDataError
@@ -15,16 +17,22 @@ from backend.core.pipeline import (
     risk_engine,
     run_pipeline,
 )
-from backend.core.scan_config import load_scan_config
+from backend.core.scan_config import UNIVERSE_MODES, load_scan_config
 from backend.core.scan_state import (
+    clear_scan_overrides,
+    clear_universe_cache,
     get_current_batch,
     get_last_scan,
     get_next_run,
+    get_scan_overrides,
     is_paused,
     pause_scans,
+    reset_scan_rotation,
     resume_scans,
+    save_scan_overrides,
     worker_alive,
 )
+from backend.core.universe import normalize_symbols, resolve_universe
 from backend.database.models import Base, TradeJournalModel
 from backend.database.session import engine, get_db
 
@@ -52,6 +60,53 @@ def get_market_data() -> AlpacaMarketData:
         except AlpacaMarketDataError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
     return _market_data
+
+
+def _safe_market() -> Optional[AlpacaMarketData]:
+    try:
+        return get_market_data()
+    except Exception:
+        return None
+
+
+class ScanConfigUpdate(BaseModel):
+    universe_mode: Optional[str] = None
+    universe: Optional[List[str]] = None
+    universe_size: Optional[int] = None
+    universe_min_price: Optional[float] = None
+    batch_size: Optional[int] = None
+    interval_minutes: Optional[int] = None
+    dry_run: Optional[bool] = None
+    skip_held: Optional[bool] = None
+    market_hours_only: Optional[bool] = None
+
+
+def _config_response(config: Dict[str, Any]) -> Dict[str, Any]:
+    universe, source = resolve_universe(config, _safe_market(), refresh=False)
+    overrides = get_scan_overrides()
+    return {
+        "universe_mode": config["universe_mode"],
+        "universe": config["universe"],
+        "universe_size": config["universe_size"],
+        "universe_min_price": config["universe_min_price"],
+        "batch_size": config["batch_size"],
+        "interval_minutes": config["interval_minutes"],
+        "dry_run": config["dry_run"],
+        "skip_held": config["skip_held"],
+        "market_hours_only": config["market_hours_only"],
+        "resolved_universe": universe,
+        "universe_source": source,
+        "overrides_active": sorted(overrides.keys()),
+    }
+
+
+def _range(name: str, value: Optional[float], low: float, high: float) -> float:
+    if value is None or value < low or value > high:
+        raise HTTPException(
+            status_code=422,
+            detail="%s must be between %s and %s." % (name, low, high),
+        )
+    return float(value)
 
 
 def _init_db(retries: int = 10, delay: float = 2.0) -> None:
@@ -145,10 +200,11 @@ def analyze_ticker(
 def scan_status():
     """Reports scheduler configuration and the worker's last heartbeat/run."""
     config = load_scan_config()
+    market = _safe_market()
+    universe, universe_source = resolve_universe(config, market, refresh=False)
 
     batch = get_current_batch()
     if batch is None:
-        universe = config["universe"]
         size = config["batch_size"] or 0
         count = int(math.ceil(len(universe) / size)) if size else 0
         batch = {
@@ -159,16 +215,19 @@ def scan_status():
         }
 
     market_open = None
-    try:
-        market_open = get_market_data().is_market_open()
-    except Exception as exc:  # never fail status because Alpaca is unreachable
-        logger.warning("Could not read Alpaca clock for scan status: %s", exc)
+    if market is not None:
+        try:
+            market_open = market.is_market_open()
+        except Exception as exc:  # never fail status because Alpaca is unreachable
+            logger.warning("Could not read Alpaca clock for scan status: %s", exc)
 
     return {
         "enabled": config["enabled"],
         "paused": is_paused(),
         "watchlist": batch["tickers"],
         "universe_size": batch["universe_size"],
+        "universe_mode": config["universe_mode"],
+        "universe_source": universe_source,
         "batch_index": batch["index"],
         "batch_count": batch["count"],
         "batch_size": config["batch_size"],
@@ -181,6 +240,99 @@ def scan_status():
         "last_scan": get_last_scan(),
         "next_run_at": get_next_run(),
     }
+
+
+@app.get("/api/v1/scan/config")
+def get_scan_settings():
+    """Returns editable scanner settings plus the currently resolved universe."""
+    return _config_response(load_scan_config())
+
+
+@app.put("/api/v1/scan/config")
+def update_scan_settings(payload: ScanConfigUpdate):
+    """Persists dashboard overrides in Redis; the worker applies them live."""
+    updates = payload.model_dump(exclude_unset=True)
+    if not updates:
+        return _config_response(load_scan_config())
+
+    if "universe_mode" in updates:
+        mode = str(updates["universe_mode"] or "").strip().lower()
+        if mode not in UNIVERSE_MODES:
+            raise HTTPException(
+                status_code=422,
+                detail="universe_mode must be one of: %s"
+                % ", ".join(UNIVERSE_MODES),
+            )
+        updates["universe_mode"] = mode
+
+    if "universe" in updates:
+        symbols = normalize_symbols(updates["universe"])
+        if not symbols:
+            raise HTTPException(
+                status_code=422, detail="universe must contain at least one symbol."
+            )
+        if len(symbols) > 100:
+            raise HTTPException(
+                status_code=422, detail="universe cannot exceed 100 symbols."
+            )
+        updates["universe"] = symbols
+
+    if "universe_size" in updates:
+        updates["universe_size"] = int(
+            _range("universe_size", updates["universe_size"], 1, 100)
+        )
+    if "universe_min_price" in updates:
+        updates["universe_min_price"] = _range(
+            "universe_min_price", updates["universe_min_price"], 0, 10000
+        )
+    if "batch_size" in updates:
+        updates["batch_size"] = int(
+            _range("batch_size", updates["batch_size"], 1, 100)
+        )
+    if "interval_minutes" in updates:
+        updates["interval_minutes"] = int(
+            _range("interval_minutes", updates["interval_minutes"], 1, 1440)
+        )
+    for flag in ("dry_run", "skip_held", "market_hours_only"):
+        if flag in updates and updates[flag] is None:
+            raise HTTPException(
+                status_code=422, detail="%s must be a boolean." % flag
+            )
+
+    overrides = get_scan_overrides()
+    overrides.update(updates)
+    save_scan_overrides(overrides)
+
+    if any(
+        key in updates
+        for key in (
+            "universe",
+            "universe_mode",
+            "universe_size",
+            "universe_min_price",
+        )
+    ):
+        clear_universe_cache()
+        reset_scan_rotation()
+
+    return _config_response(load_scan_config())
+
+
+@app.delete("/api/v1/scan/config")
+def reset_scan_settings():
+    """Clears dashboard overrides and falls back to env/default settings."""
+    clear_scan_overrides()
+    clear_universe_cache()
+    reset_scan_rotation()
+    return _config_response(load_scan_config())
+
+
+@app.post("/api/v1/scan/universe/refresh")
+def refresh_scan_universe():
+    """Forces a fresh most-active universe resolution."""
+    config = load_scan_config()
+    symbols, source = resolve_universe(config, _safe_market(), refresh=True)
+    return {"symbols": symbols, "source": source, "count": len(symbols)}
 
 
 @app.post("/api/v1/scan/pause")
@@ -224,6 +376,16 @@ def list_trades(limit: int = 50, db: Session = Depends(get_db)):
         }
         for r in rows
     ]
+
+
+@app.get("/api/v1/kill-switch/status")
+def kill_switch_status():
+    try:
+        engaged = risk_engine.is_kill_switch_active()
+    except Exception as exc:
+        logger.warning("Could not read kill-switch state: %s", exc)
+        engaged = False
+    return {"engaged": bool(engaged)}
 
 
 @app.post("/api/v1/kill-switch/trigger")

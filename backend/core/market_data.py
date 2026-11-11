@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
+import requests
 from alpaca.data.enums import DataFeed
 from alpaca.data.historical.news import NewsClient
 from alpaca.data.historical.stock import StockHistoricalDataClient
@@ -12,6 +13,50 @@ from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
 
 logger = logging.getLogger(__name__)
+
+# Leveraged/inverse products distort the HMM regime and Kelly sizing, so the
+# dynamic universe excludes the most common ones even when they top the tape.
+_EXCLUDED_LEVERAGED = {
+    "BULZ",
+    "BOIL",
+    "BRZU",
+    "DFEN",
+    "DUST",
+    "ERX",
+    "ERY",
+    "FAS",
+    "FAZ",
+    "FNGD",
+    "FNGU",
+    "JDST",
+    "JNUG",
+    "KOLD",
+    "LABD",
+    "LABU",
+    "NAIL",
+    "NUGT",
+    "SOXL",
+    "SOXS",
+    "SPXL",
+    "SPXS",
+    "SPXU",
+    "SQQQ",
+    "SVXY",
+    "TECS",
+    "TECL",
+    "TQQQ",
+    "TPOR",
+    "TNA",
+    "TZA",
+    "UPRO",
+    "UVXY",
+    "VIXY",
+    "VXX",
+    "WEBS",
+    "WEBL",
+    "YANG",
+    "YINN",
+}
 
 
 class AlpacaMarketDataError(RuntimeError):
@@ -116,6 +161,93 @@ class AlpacaMarketData:
             return result
 
         return self._cached("positions", fetch)
+
+    def get_most_active_symbols(
+        self,
+        top: int = 30,
+        min_price: float = 10.0,
+        by: str = "trades",
+    ) -> List[str]:
+        """Returns liquid, non-leveraged symbols from Alpaca's most-active screener.
+
+        Falls back to the unfiltered screener order if snapshots are unavailable,
+        so a sweep can still run on a degraded feed.
+        """
+        limit = max(1, min(100, int(top)))
+        request_top = min(100, max(40, limit * 2))
+        headers = {
+            "APCA-API-KEY-ID": self.api_key or "",
+            "APCA-API-SECRET-KEY": self.secret_key or "",
+        }
+
+        try:
+            response = requests.get(
+                "https://data.alpaca.markets/v1beta1/screener/stocks/most-actives",
+                params={"top": request_top, "by": by},
+                headers=headers,
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            raise AlpacaMarketDataError(
+                "Could not fetch most-active symbols: %s" % exc
+            ) from exc
+
+        symbols: List[str] = []
+        for item in payload.get("most_actives") or []:
+            symbol = str(item.get("symbol") or "").strip().upper()
+            if not symbol or symbol in _EXCLUDED_LEVERAGED:
+                continue
+            if "/" in symbol or ":" in symbol or symbol in symbols:
+                continue
+            symbols.append(symbol)
+
+        if not symbols:
+            return []
+
+        try:
+            snapshot_response = requests.get(
+                "https://data.alpaca.markets/v2/stocks/snapshots",
+                params={"symbols": ",".join(symbols), "feed": self.feed_name},
+                headers=headers,
+                timeout=15,
+            )
+            snapshot_response.raise_for_status()
+            payload = snapshot_response.json()
+            if isinstance(payload, dict):
+                snapshots = payload.get("snapshots") or {
+                    symbol: data
+                    for symbol, data in payload.items()
+                    if symbol != "next_page_token"
+                }
+            else:
+                snapshots = {}
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning(
+                "Snapshot price filter unavailable, using raw most-active list: %s",
+                exc,
+            )
+            return symbols[:limit]
+
+        filtered: List[str] = []
+        for symbol in symbols:
+            snapshot = snapshots.get(symbol) or {}
+            price = (snapshot.get("latestTrade") or {}).get("p")
+            if price is None:
+                price = (snapshot.get("dailyBar") or {}).get("c")
+            if price is None:
+                price = (snapshot.get("prevDailyBar") or {}).get("c")
+            try:
+                if float(price) < min_price:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            filtered.append(symbol)
+            if len(filtered) >= limit:
+                break
+
+        return filtered or symbols[:limit]
 
     def get_bars(self, ticker: str, days: int = 180) -> List[Dict[str, Any]]:
         """Returns ascending daily OHLCV bars from Alpaca's configured feed."""

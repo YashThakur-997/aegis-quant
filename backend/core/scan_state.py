@@ -15,6 +15,8 @@ SCAN_NEXT_KEY = "aegis:scan:next"
 SCAN_LOCK_KEY = "aegis:scan:lock"
 SCAN_CURSOR_KEY = "aegis:scan:cursor"
 SCAN_BATCH_KEY = "aegis:scan:batch"
+SCAN_CONFIG_KEY = "aegis:scan:config"
+SCAN_UNIVERSE_KEY = "aegis:scan:universe"
 
 _client: Optional[redis.Redis] = None
 
@@ -132,3 +134,46 @@ def get_current_batch() -> Optional[Dict[str, Any]]:
         return json.loads(raw)
     except ValueError:
         return None
+
+
+def get_scan_overrides() -> Dict[str, Any]:
+    """Returns runtime scanner settings saved from the dashboard."""
+    raw = get_redis().get(SCAN_CONFIG_KEY)
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+        return payload if isinstance(payload, dict) else {}
+    except ValueError:
+        return {}
+
+
+def save_scan_overrides(overrides: Dict[str, Any]) -> None:
+    get_redis().set(SCAN_CONFIG_KEY, json.dumps(overrides))
+
+
+def clear_scan_overrides() -> None:
+    get_redis().delete(SCAN_CONFIG_KEY)
+
+
+def get_universe_cache() -> Optional[Dict[str, Any]]:
+    raw = get_redis().get(SCAN_UNIVERSE_KEY)
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+        return payload if isinstance(payload, dict) else None
+    except ValueError:
+        return None
+
+
+def write_universe_cache(payload: Dict[str, Any]) -> None:
+    get_redis().set(SCAN_UNIVERSE_KEY, json.dumps(payload))
+
+
+def clear_universe_cache() -> None:
+    get_redis().delete(SCAN_UNIVERSE_KEY)
+
+
+def reset_scan_rotation() -> None:
+    get_redis().delete(SCAN_CURSOR_KEY, SCAN_BATCH_KEY)

@@ -103,11 +103,52 @@ export type ScanSummary = {
   results: ScanResult[];
 };
 
+export type UniverseMode = "static" | "most_active";
+
+export type ScanConfig = {
+  universe_mode: UniverseMode;
+  universe: string[];
+  universe_size: number;
+  universe_min_price: number;
+  batch_size: number;
+  interval_minutes: number;
+  dry_run: boolean;
+  skip_held: boolean;
+  market_hours_only: boolean;
+  resolved_universe: string[];
+  universe_source: string;
+  overrides_active: string[];
+};
+
+export type ScanConfigUpdate = Partial<{
+  universe_mode: UniverseMode;
+  universe: string[];
+  universe_size: number;
+  universe_min_price: number;
+  batch_size: number;
+  interval_minutes: number;
+  dry_run: boolean;
+  skip_held: boolean;
+  market_hours_only: boolean;
+}>;
+
+export type UniverseRefresh = {
+  symbols: string[];
+  source: string;
+  count: number;
+};
+
+export type KillSwitchStatus = {
+  engaged: boolean;
+};
+
 export type ScanStatus = {
   enabled: boolean;
   paused: boolean;
   watchlist: string[];
   universe_size: number;
+  universe_mode: UniverseMode;
+  universe_source: string;
   batch_index: number;
   batch_count: number;
   batch_size: number;
@@ -201,6 +242,33 @@ export function fetchJournals(limit = 50): Promise<JournalEntry[]> {
 
 export function fetchScanStatus(): Promise<ScanStatus> {
   return request<ScanStatus>("/api/v1/scan/status");
+}
+
+export function fetchScanConfig(): Promise<ScanConfig> {
+  return request<ScanConfig>("/api/v1/scan/config");
+}
+
+export function updateScanConfig(
+  payload: ScanConfigUpdate
+): Promise<ScanConfig> {
+  return request<ScanConfig>("/api/v1/scan/config", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function resetScanConfig(): Promise<ScanConfig> {
+  return request<ScanConfig>("/api/v1/scan/config", { method: "DELETE" });
+}
+
+export function refreshScanUniverse(): Promise<UniverseRefresh> {
+  return request<UniverseRefresh>("/api/v1/scan/universe/refresh", {
+    method: "POST",
+  });
+}
+
+export function fetchKillSwitchStatus(): Promise<KillSwitchStatus> {
+  return request<KillSwitchStatus>("/api/v1/kill-switch/status");
 }
 
 export function pauseScanner(): Promise<{ paused: boolean }> {

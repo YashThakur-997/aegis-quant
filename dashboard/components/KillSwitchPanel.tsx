@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 
 import { triggerKillSwitch } from "@/lib/api";
 
@@ -23,18 +24,23 @@ export default function KillSwitchPanel() {
       const result = await triggerKillSwitch("Manual override from dashboard");
       setState("success");
       setMessage(result.status);
+      toast.error("KILL-SWITCH ENGAGED", {
+        description: "All autonomous trading has been halted.",
+        duration: 8000,
+      });
     } catch (error) {
       setState("error");
-      setMessage(
-        error instanceof Error ? error.message : "Failed to engage kill-switch."
-      );
+      const detail =
+        error instanceof Error ? error.message : "Failed to engage kill-switch.";
+      setMessage(detail);
+      toast.error("Kill-switch failed", { description: detail });
     }
   }
 
   const engaged = state === "success";
 
   return (
-    <section className="rounded-2xl border border-zinc-800 border-l-2 border-l-red-700 bg-zinc-900 p-6">
+    <section className="glass-panel border-l-2 border-l-red-700 p-4 sm:p-6">
       <div className="flex items-center gap-2">
         <span className="h-2 w-2 rounded-full bg-red-500" />
         <span className="text-xs font-medium text-red-400">
@@ -62,7 +68,7 @@ export default function KillSwitchPanel() {
 
       {message ? (
         <p
-          className={`mt-4 rounded-lg border px-3 py-2 text-xs font-medium ${
+          className={`mt-4 rounded-lg border px-3 py-2 font-mono text-xs font-medium ${
             state === "error"
               ? "border-red-800/70 bg-red-950/60 text-red-300"
               : "border-red-700/60 bg-red-900/30 text-red-200"

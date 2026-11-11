@@ -25,6 +25,7 @@ from backend.core.scan_state import (
     write_last_scan,
     write_next_run,
 )
+from backend.core.universe import resolve_universe
 from backend.database.session import SessionLocal
 
 logging.basicConfig(
@@ -96,7 +97,13 @@ def run_scan(
             logger.error("Scan skipped, account data unavailable: %s", exc)
             return _skipped(started, "data error: %s" % exc)
 
-        batch = next_scan_batch(config["universe"], config["batch_size"])
+        universe, universe_source = resolve_universe(config, market, refresh=True)
+        config["universe"] = universe
+        logger.info(
+            "Universe resolved: %s symbols from %s", len(universe), universe_source
+        )
+
+        batch = next_scan_batch(universe, config["batch_size"])
         watchlist = batch["tickers"]
         logger.info(
             "Scanning batch %s/%s (%s of %s symbols)",
@@ -200,7 +207,32 @@ def run_scan(
     return summary
 
 
+def _sync_interval(scheduler: BlockingScheduler) -> None:
+    """Applies a dashboard interval change without restarting the worker."""
+    interval_minutes = load_scan_config()["interval_minutes"]
+    job = scheduler.get_job("scan")
+    if job is None:
+        return
+
+    current = None
+    interval = getattr(job.trigger, "interval", None)
+    if interval is not None:
+        current = int(round(interval.total_seconds() / 60))
+
+    if current != interval_minutes:
+        scheduler.reschedule_job(
+            "scan",
+            trigger=IntervalTrigger(minutes=interval_minutes, timezone=TIMEZONE),
+        )
+        logger.info("Scanner interval updated to %s min.", interval_minutes)
+
+
 def _heartbeat_job(scheduler: BlockingScheduler) -> None:
+    try:
+        _sync_interval(scheduler)
+    except Exception:
+        logger.exception("Could not sync scanner interval")
+
     extra: Dict[str, Any] = {}
     job = scheduler.get_job("scan")
     if job is not None and job.next_run_time is not None:
@@ -258,8 +290,9 @@ def main() -> None:
         else None
     )})
     logger.info(
-        "Scanner started: every %s min, universe=%s symbols, batch=%s, dry_run=%s",
+        "Scanner started: every %s min, mode=%s, universe=%s symbols, batch=%s, dry_run=%s",
         config["interval_minutes"],
+        config["universe_mode"],
         len(config["universe"]),
         config["batch_size"],
         config["dry_run"],

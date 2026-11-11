@@ -1,7 +1,10 @@
 "use client";
 
+import { Download } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 
+import { downloadCsv, journalCsvFilename, journalsToCsv } from "@/lib/csv";
 import {
   fetchJournals,
   formatConviction,
@@ -10,6 +13,8 @@ import {
   formatTimestamp,
   type JournalEntry,
 } from "@/lib/api";
+
+const REFRESH_MS = 7000;
 
 function StatusPill({ status }: { status: string }) {
   const palette: Record<string, string> = {
@@ -77,20 +82,34 @@ export default function JournalTable() {
     void load(true);
     const interval = window.setInterval(() => {
       void load(false);
-    }, 7000);
+    }, REFRESH_MS);
     return () => window.clearInterval(interval);
   }, [load]);
 
+  function exportCsv() {
+    if (visible.length === 0) return;
+    try {
+      downloadCsv(journalCsvFilename(), journalsToCsv(visible));
+      toast.success("Journal exported", {
+        description: `${visible.length} rows written to CSV`,
+      });
+    } catch {
+      toast.error("Export failed", {
+        description: "Could not generate the CSV file.",
+      });
+    }
+  }
+
   return (
-    <section className="rounded-2xl border border-zinc-800 bg-zinc-900">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-6 py-4">
+    <section className="glass-panel">
+      <div className="flex flex-col gap-3 border-b border-zinc-800 px-4 py-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:px-6">
         <div>
           <p className="text-xs font-medium text-amber-500">Audit trail</p>
           <h2 className="mt-1 text-xl font-medium text-zinc-100">
-            Trade journal
+            Immutable trade journal
           </h2>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <div className="flex rounded-lg border border-zinc-700 bg-zinc-950/60 p-1 text-xs font-semibold">
             {(["all", "actionable"] as const).map((mode) => (
               <button
@@ -107,10 +126,19 @@ export default function JournalTable() {
               </button>
             ))}
           </div>
-          <span className="flex items-center gap-2 text-xs text-zinc-500">
+          <span className="hidden items-center gap-2 text-xs text-zinc-500 sm:flex">
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            Updates every 7 sec
+            Updates every {REFRESH_MS / 1000} sec
           </span>
+          <button
+            type="button"
+            onClick={exportCsv}
+            disabled={visible.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-950/60 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-amber-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Download size={13} />
+            Export CSV
+          </button>
           <button
             type="button"
             onClick={() => void load(true)}
@@ -122,14 +150,14 @@ export default function JournalTable() {
       </div>
 
       {error ? (
-        <div className="mx-6 mt-4 rounded-lg border border-red-800/70 bg-red-950/50 px-3 py-2 text-xs text-red-300">
+        <div className="mx-4 mt-4 rounded-lg border border-red-800/70 bg-red-950/50 px-3 py-2 text-xs text-red-300 sm:mx-6">
           {error}
         </div>
       ) : null}
 
-      <div className="overflow-x-auto">
+      <div className="hidden overflow-x-auto md:block">
         <table className="w-full min-w-[900px] border-collapse text-left text-sm">
-          <thead>
+          <thead className="bg-zinc-950/60">
             <tr className="text-xs text-zinc-500">
               <th className="px-6 py-3 font-medium">Time</th>
               <th className="px-3 py-3 font-medium">Ticker</th>
@@ -191,7 +219,7 @@ export default function JournalTable() {
                   <td className="px-3 py-3 text-right font-mono text-xs text-zinc-300">
                     {formatCurrency(entry.stop_loss_price)}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-3 text-xs text-zinc-400">
+                  <td className="whitespace-nowrap px-3 py-3 font-mono text-xs text-zinc-400">
                     {entry.regime ?? "—"}
                   </td>
                   <td className="px-3 py-3 text-right font-mono tabular-nums text-xs text-zinc-300">
@@ -212,12 +240,82 @@ export default function JournalTable() {
         </table>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 px-6 py-3 text-xs text-zinc-500">
-        <span>
+      <div className="divide-y divide-zinc-800/70 md:hidden">
+        {loading && visible.length === 0 ? (
+          <p className="px-4 py-10 text-center text-xs text-zinc-500">
+            Loading audit log…
+          </p>
+        ) : visible.length === 0 ? (
+          <p className="px-4 py-10 text-center text-xs text-zinc-500">
+            {entries.length === 0
+              ? "No journal entries yet. Evaluate a trade to populate the audit trail."
+              : "No actionable trades in the current window."}
+          </p>
+        ) : (
+          visible.map((entry) => (
+            <article key={entry.trade_id} className="p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-mono text-sm font-semibold text-zinc-100">
+                    {entry.ticker}
+                  </p>
+                  <p className="mt-0.5 font-mono text-[11px] text-zinc-500">
+                    {formatTimestamp(entry.timestamp)}
+                  </p>
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  <StatusPill status={entry.status} />
+                  <ActionTag action={entry.action} />
+                </div>
+              </div>
+
+              <dl className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+                <div>
+                  <dt className="text-zinc-500">Shares</dt>
+                  <dd className="font-mono text-zinc-300">
+                    {formatNumber(entry.shares)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-zinc-500">Capital</dt>
+                  <dd className="font-mono text-zinc-300">
+                    {formatCurrency(entry.allocated_capital)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-zinc-500">Stop</dt>
+                  <dd className="font-mono text-zinc-300">
+                    {formatCurrency(entry.stop_loss_price)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-zinc-500">Score</dt>
+                  <dd className="font-mono text-zinc-300">
+                    {formatConviction(entry.conviction)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-zinc-500">Regime</dt>
+                  <dd className="font-mono text-zinc-300">
+                    {entry.regime ?? "—"}
+                  </dd>
+                </div>
+              </dl>
+
+              <p className="mt-3 text-xs leading-relaxed text-zinc-400">
+                {entry.plain_language_reasoning ?? "—"}
+              </p>
+            </article>
+          ))
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 px-4 py-3 text-xs text-zinc-500 sm:px-6">
+        <span className="font-mono tabular-nums">
           {visible.length} of {entries.length}{" "}
           {entries.length === 1 ? "entry" : "entries"}
         </span>
-        <span>
+        <span className="font-mono">
           {lastUpdated
             ? `Last sync ${lastUpdated.toLocaleTimeString("en-US")}`
             : "GET /api/v1/journals"}
