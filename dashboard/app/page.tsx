@@ -1,36 +1,34 @@
 import JournalTable from "@/components/JournalTable";
 import KillSwitchPanel from "@/components/KillSwitchPanel";
+import ScannerStatus from "@/components/ScannerStatus";
 import TradeEvaluatorForm from "@/components/TradeEvaluatorForm";
 
 export default function Home() {
   return (
-    <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
+    <main className="mx-auto max-w-screen-2xl px-5 py-8 sm:px-8 lg:px-10">
+      <header className="mb-8 flex flex-wrap items-center justify-between gap-4 border-b border-zinc-800 pb-6">
         <div>
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-indigo-500/40 bg-indigo-500/10 shadow-glow">
-              <span className="font-mono text-lg font-bold text-indigo-300">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900">
+              <span className="font-mono text-lg font-medium text-amber-500">
                 Æ
               </span>
             </div>
             <div>
-              <h1 className="text-2xl font-bold tracking-tight text-zinc-100 sm:text-3xl">
-                AEGIS<span className="text-indigo-400">-QUANT</span>
+              <h1 className="text-xl font-medium text-zinc-100 sm:text-2xl">
+                AEGIS-QUANT
               </h1>
-              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-                Autonomous Trading Desk
+              <p className="mt-1 text-sm text-zinc-400">
+                Autonomous trading desk
               </p>
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-3 rounded-full border border-zinc-800 bg-zinc-900/60 px-4 py-2">
-          <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
-          </span>
-          <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
-            Autonomous Mode
+        <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+          <span className="h-2 w-2 rounded-full bg-emerald-500" />
+          <span className="text-sm text-zinc-300">
+            Autonomous mode
           </span>
         </div>
       </header>
@@ -40,7 +38,10 @@ export default function Home() {
           <TradeEvaluatorForm />
         </div>
         <div className="lg:col-span-4">
-          <KillSwitchPanel />
+          <div className="flex flex-col gap-6">
+            <ScannerStatus />
+            <KillSwitchPanel />
+          </div>
         </div>
       </div>
 
@@ -48,7 +49,7 @@ export default function Home() {
         <JournalTable />
       </div>
 
-      <footer className="mt-8 flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-600">
+      <footer className="mt-8 flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 pt-4 text-xs text-zinc-500">
         <span>AEGIS-QUANT · deterministic guardrails · sandbox execution</span>
         <span className="font-mono">API http://localhost:8000</span>
       </footer>

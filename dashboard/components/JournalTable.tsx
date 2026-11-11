@@ -12,20 +12,23 @@ import {
 } from "@/lib/api";
 
 function StatusPill({ status }: { status: string }) {
-  const palette =
-    status === "EXECUTED"
-      ? "border-emerald-700/60 bg-emerald-900/30 text-emerald-300"
-      : status === "HOLD"
-        ? "border-amber-700/60 bg-amber-900/30 text-amber-300"
-        : status === "REJECTED"
-          ? "border-red-800/70 bg-red-950/60 text-red-300"
-          : "border-zinc-700/60 bg-zinc-800/40 text-zinc-300";
+  const palette: Record<string, string> = {
+    EXECUTED: "border-emerald-700/60 bg-emerald-900/30 text-emerald-300",
+    DRY_RUN: "border-zinc-700 bg-zinc-800 text-zinc-300",
+    HOLD: "border-amber-700/60 bg-amber-900/30 text-amber-300",
+    REJECTED: "border-red-800/70 bg-red-950/60 text-red-300",
+  };
 
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${palette}`}
+      className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${
+        palette[status] ?? "border-zinc-700/60 bg-zinc-800/40 text-zinc-300"
+      }`}
     >
-      {status}
+      {status
+        .replaceAll("_", " ")
+        .toLowerCase()
+        .replace(/(^|\s)\S/g, (letter) => letter.toUpperCase())}
     </span>
   );
 }
@@ -38,20 +41,24 @@ function ActionTag({ action }: { action: string }) {
         ? "text-red-400"
         : "text-amber-400";
   return (
-    <span className={`font-mono text-xs font-bold ${color}`}>{action}</span>
+    <span className={`font-mono text-xs font-medium ${color}`}>{action}</span>
   );
 }
 
 export default function JournalTable() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
+  const [filter, setFilter] = useState<"all" | "actionable">("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
+  const visible =
+    filter === "all" ? entries : entries.filter((e) => e.status !== "HOLD");
+
   const load = useCallback(async (showSpinner: boolean) => {
     if (showSpinner) setLoading(true);
     try {
-      const data = await fetchJournals(50);
+      const data = await fetchJournals(200);
       setEntries(Array.isArray(data) ? data : []);
       setError("");
       setLastUpdated(new Date());
@@ -75,25 +82,39 @@ export default function JournalTable() {
   }, [load]);
 
   return (
-    <section className="rounded-2xl border border-zinc-800 bg-zinc-900/50 shadow-xl backdrop-blur">
+    <section className="rounded-2xl border border-zinc-800 bg-zinc-900">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-6 py-4">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-indigo-400">
-            Audit Trail
-          </p>
-          <h2 className="mt-1 text-xl font-semibold text-zinc-100">
-            Live Trade Journal
+          <p className="text-xs font-medium text-amber-500">Audit trail</p>
+          <h2 className="mt-1 text-xl font-medium text-zinc-100">
+            Trade journal
           </h2>
         </div>
         <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 text-[11px] text-zinc-500">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-            auto-refresh 7s
+          <div className="flex rounded-lg border border-zinc-700 bg-zinc-950/60 p-1 text-xs font-semibold">
+            {(["all", "actionable"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setFilter(mode)}
+                className={`rounded-md px-2.5 py-1 transition-colors ${
+                  filter === mode
+                    ? "bg-zinc-700 text-zinc-100"
+                    : "text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                {mode === "all" ? "All" : "Actionable"}
+              </button>
+            ))}
+          </div>
+          <span className="flex items-center gap-2 text-xs text-zinc-500">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            Updates every 7 sec
           </span>
           <button
             type="button"
             onClick={() => void load(true)}
-            className="rounded-lg border border-zinc-700 bg-zinc-950/60 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-indigo-500 hover:text-indigo-300"
+            className="rounded-lg border border-zinc-700 bg-zinc-950/60 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-amber-700 hover:text-zinc-100"
           >
             Refresh
           </button>
@@ -109,7 +130,7 @@ export default function JournalTable() {
       <div className="overflow-x-auto">
         <table className="w-full min-w-[900px] border-collapse text-left text-sm">
           <thead>
-            <tr className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">
+            <tr className="text-xs text-zinc-500">
               <th className="px-6 py-3 font-medium">Time</th>
               <th className="px-3 py-3 font-medium">Ticker</th>
               <th className="px-3 py-3 font-medium">Action</th>
@@ -118,12 +139,12 @@ export default function JournalTable() {
               <th className="px-3 py-3 text-right font-medium">Capital</th>
               <th className="px-3 py-3 text-right font-medium">Stop</th>
               <th className="px-3 py-3 font-medium">Regime</th>
-              <th className="px-3 py-3 text-right font-medium">Conv.</th>
-              <th className="px-6 py-3 font-medium">Trade Diary</th>
+              <th className="px-3 py-3 text-right font-medium">Score</th>
+              <th className="px-6 py-3 font-medium">Trade diary</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-800/70">
-            {loading && entries.length === 0 ? (
+            {loading && visible.length === 0 ? (
               <tr>
                 <td
                   colSpan={10}
@@ -132,23 +153,24 @@ export default function JournalTable() {
                   Loading audit log…
                 </td>
               </tr>
-            ) : entries.length === 0 ? (
+            ) : visible.length === 0 ? (
               <tr>
                 <td
                   colSpan={10}
                   className="px-6 py-10 text-center text-xs text-zinc-500"
                 >
-                  No journal entries yet. Evaluate a trade to populate the audit
-                  trail.
+                  {entries.length === 0
+                    ? "No journal entries yet. Evaluate a trade to populate the audit trail."
+                    : "No actionable trades in the current window."}
                 </td>
               </tr>
             ) : (
-              entries.map((entry) => (
+              visible.map((entry) => (
                 <tr
                   key={entry.trade_id}
-                  className="transition hover:bg-zinc-900/70"
+                  className="transition-colors hover:bg-zinc-900/70"
                 >
-                  <td className="whitespace-nowrap px-6 py-3 font-mono text-[11px] text-zinc-400">
+                  <td className="whitespace-nowrap px-6 py-3 font-mono text-xs text-zinc-400">
                     {formatTimestamp(entry.timestamp)}
                   </td>
                   <td className="whitespace-nowrap px-3 py-3 font-mono text-xs font-semibold text-zinc-100">
@@ -172,7 +194,7 @@ export default function JournalTable() {
                   <td className="whitespace-nowrap px-3 py-3 text-xs text-zinc-400">
                     {entry.regime ?? "—"}
                   </td>
-                  <td className="px-3 py-3 text-right font-mono text-xs text-indigo-300">
+                  <td className="px-3 py-3 text-right font-mono tabular-nums text-xs text-zinc-300">
                     {formatConviction(entry.conviction)}
                   </td>
                   <td className="max-w-md px-6 py-3">
@@ -190,9 +212,10 @@ export default function JournalTable() {
         </table>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 px-6 py-3 text-[11px] text-zinc-500">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 px-6 py-3 text-xs text-zinc-500">
         <span>
-          {entries.length} {entries.length === 1 ? "entry" : "entries"} shown
+          {visible.length} of {entries.length}{" "}
+          {entries.length === 1 ? "entry" : "entries"}
         </span>
         <span>
           {lastUpdated

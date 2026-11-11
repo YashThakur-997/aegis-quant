@@ -77,6 +77,46 @@ class AlpacaMarketData:
 
         return self._cached("account", fetch)
 
+    def is_market_open(self) -> bool:
+        """Returns whether the US equity market is currently open."""
+
+        def fetch():
+            try:
+                clock = self.trading.get_clock()
+            except Exception as exc:
+                raise AlpacaMarketDataError(
+                    f"Could not read Alpaca clock: {exc}"
+                ) from exc
+            return bool(clock.is_open)
+
+        return self._cached("clock", fetch)
+
+    def get_positions(self) -> Dict[str, Dict[str, Any]]:
+        """Returns open paper positions keyed by ticker."""
+
+        def fetch():
+            try:
+                positions = self.trading.get_all_positions()
+            except Exception as exc:
+                raise AlpacaMarketDataError(
+                    f"Could not read Alpaca positions: {exc}"
+                ) from exc
+
+            result: Dict[str, Dict[str, Any]] = {}
+            for position in positions:
+                try:
+                    qty = float(position.qty)
+                except (TypeError, ValueError):
+                    qty = 0.0
+                result[position.symbol.upper()] = {
+                    "qty": qty,
+                    "side": str(position.side),
+                    "market_value": float(position.market_value or 0.0),
+                }
+            return result
+
+        return self._cached("positions", fetch)
+
     def get_bars(self, ticker: str, days: int = 180) -> List[Dict[str, Any]]:
         """Returns ascending daily OHLCV bars from Alpaca's configured feed."""
 

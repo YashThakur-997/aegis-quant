@@ -1,22 +1,32 @@
 import json
 import logging
+import math
 import time
-import uuid
 
-import pandas as pd
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from backend.core.firewall import TemporalFirewall
-from backend.core.router import RegimeStrategyRouter
-from backend.core.agents import debate_workflow
-from backend.core.risk_engine import DeterministicRiskEngine
-from backend.core.broker import AlpacaSandboxExecution
 from backend.core.market_data import AlpacaMarketData, AlpacaMarketDataError
-from backend.database.session import engine, get_db
+from backend.core.pipeline import (
+    KillSwitchActive,
+    MarketInputPayload,
+    risk_engine,
+    run_pipeline,
+)
+from backend.core.scan_config import load_scan_config
+from backend.core.scan_state import (
+    get_current_batch,
+    get_last_scan,
+    get_next_run,
+    is_paused,
+    pause_scans,
+    resume_scans,
+    worker_alive,
+)
 from backend.database.models import Base, TradeJournalModel
+from backend.database.session import engine, get_db
 
 logger = logging.getLogger("aegis")
 
@@ -29,11 +39,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Initialize core components
-risk_engine = DeterministicRiskEngine(initial_equity=10000.0, daily_loss_limit_pct=0.025)
-broker = AlpacaSandboxExecution()
-router = RegimeStrategyRouter()
 
 _market_data = None
 
@@ -67,161 +72,9 @@ def on_startup() -> None:
     _init_db()
 
 
-class MarketInputPayload(BaseModel):
-    ticker: str
-    historical_data: list[dict]  # List of OHLCV dicts
-    news_summary: str
-    current_equity: float
-    current_daily_pnl: float
-
-
-def _journal_trade(
-    db: Session,
-    *,
-    payload: MarketInputPayload,
-    signal,
-    regime: str,
-    status: str,
-    shares: int = None,
-    allocated_capital: float = None,
-    stop_loss_price: float = None,
-) -> TradeJournalModel:
-    """Persists a decision/trade outcome to the Postgres trade journal."""
-    entry = TradeJournalModel(
-        trade_id=str(uuid.uuid4()),
-        action=signal.direction,
-        ticker=payload.ticker,
-        shares=shares,
-        allocated_capital=allocated_capital,
-        stop_loss_price=stop_loss_price,
-        regime=regime,
-        conviction=signal.conviction,
-        plain_language_reasoning=signal.plain_language_reasoning,
-        bull_catalysts=json.dumps(signal.bull_catalysts or []),
-        bear_risks=json.dumps(signal.bear_risks or []),
-        status=status,
-    )
-    db.add(entry)
-    db.commit()
-    db.refresh(entry)
-    return entry
-
-
-def _run_pipeline(payload: MarketInputPayload, db: Session, dry_run: bool = False):
-    # 1. Check Kill-Switch first
-    if risk_engine.is_kill_switch_active():
-        raise HTTPException(status_code=403, detail="Circuit breaker active. Trading halted.")
-
-    df = pd.DataFrame(payload.historical_data)
-
-    # 2. Swimlane 1: Temporal Firewall (Anonymize & Normalize)
-    masked_df = TemporalFirewall.anonymize_market_data(df, ticker_alias="ASSET_X")
-
-    # 3. Swimlane 2: Regime Router & VectorBT Validation
-    current_regime, _ = router.fit_predict_regime(df)
-    vbt_report = router.validate_with_vectorbt(df)
-
-    # 4. Swimlane 3: Adversarial LangGraph Debate
-    debate_initial_state = {
-        "anonymized_data": masked_df.tail(10).to_string(),
-        "news_summary": payload.news_summary,
-        "bull_thesis": "",
-        "bear_thesis": "",
-        "final_signal": None
-    }
-    debate_result = debate_workflow.invoke(debate_initial_state)
-    signal = debate_result["final_signal"]
-
-    if signal.direction == "HOLD":
-        journal = _journal_trade(
-            db, payload=payload, signal=signal, regime=current_regime, status="HOLD"
-        )
-        return {
-            "status": "HOLD",
-            "reason": "LangGraph consensus resulted in HOLD.",
-            "trade_id": journal.trade_id,
-        }
-
-    # 5. Swimlane 4: Deterministic Risk Guardrails (Kelly Sizing & ATR Stop)
-    # Assume mock ATR of 2.5 and Win Rate of 55% with 1.5 Reward-to-Risk ratio for execution
-    mock_atr = float(df['high'].iloc[-1] - df['low'].iloc[-1])
-    current_price = float(df['close'].iloc[-1])
-
-    risk_assessment = risk_engine.calculate_position_size(
-        current_equity=payload.current_equity,
-        current_daily_pnl=payload.current_daily_pnl,
-        win_rate=0.55,
-        reward_risk_ratio=1.5,
-        atr=mock_atr,
-        price=current_price,
-        direction=signal.direction
-    )
-
-    if not risk_assessment["approved"]:
-        journal = _journal_trade(
-            db, payload=payload, signal=signal, regime=current_regime, status="REJECTED"
-        )
-        return {
-            "status": "REJECTED_BY_RISK_ENGINE",
-            "details": risk_assessment["reason"],
-            "trade_id": journal.trade_id,
-        }
-
-    if dry_run:
-        journal = _journal_trade(
-            db,
-            payload=payload,
-            signal=signal,
-            regime=current_regime,
-            status="DRY_RUN",
-            shares=risk_assessment["shares"],
-            allocated_capital=risk_assessment["allocated_capital"],
-            stop_loss_price=risk_assessment["stop_loss_price"],
-        )
-        return {
-            "status": "DRY_RUN",
-            "regime": current_regime,
-            "vectorbt_validation": vbt_report,
-            "trade_signal": signal.dict(),
-            "risk_allocation": risk_assessment,
-            "broker_execution": {
-                "success": True,
-                "order_id": None,
-                "ticker": payload.ticker.upper(),
-                "shares": risk_assessment["shares"],
-                "side": signal.direction,
-                "status": "DRY_RUN",
-            },
-            "trade_id": journal.trade_id,
-        }
-
-    # 6. Swimlane 5: Alpaca Sandbox Execution & Journaling
-    execution_result = broker.execute_paper_order(
-        ticker=payload.ticker,
-        shares=risk_assessment["shares"],
-        side=signal.direction
-    )
-
-    journal = _journal_trade(
-        db,
-        payload=payload,
-        signal=signal,
-        regime=current_regime,
-        status="EXECUTED" if execution_result.get("success") else "REJECTED",
-        shares=risk_assessment["shares"],
-        allocated_capital=risk_assessment["allocated_capital"],
-        stop_loss_price=risk_assessment["stop_loss_price"],
-    )
-
-    return {
-        "status": "SUCCESS",
-        "regime": current_regime,
-        "vectorbt_validation": vbt_report,
-        "trade_signal": signal.dict(),
-        "risk_allocation": risk_assessment,
-        "broker_execution": execution_result,
-        "trade_id": journal.trade_id,
-    }
+@app.exception_handler(KillSwitchActive)
+async def kill_switch_handler(request, exc: KillSwitchActive):
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
 
 
 @app.post("/api/v1/evaluate-trade")
@@ -229,7 +82,7 @@ def evaluate_and_execute_trade(
     payload: MarketInputPayload, db: Session = Depends(get_db)
 ):
     """Manual/simulation path: the caller supplies all market inputs."""
-    return _run_pipeline(payload, db)
+    return run_pipeline(payload, db)
 
 
 @app.post("/api/v1/analyze/{ticker}")
@@ -274,7 +127,7 @@ def analyze_ticker(
         current_daily_pnl=snapshot["daily_pnl_pct"],
     )
 
-    result = _run_pipeline(payload, db, dry_run=dry_run)
+    result = run_pipeline(payload, db, dry_run=dry_run)
     result["data_context"] = {
         "ticker": symbol,
         "feed": market.feed_name.upper(),
@@ -286,6 +139,61 @@ def analyze_ticker(
         "dry_run": dry_run,
     }
     return result
+
+
+@app.get("/api/v1/scan/status")
+def scan_status():
+    """Reports scheduler configuration and the worker's last heartbeat/run."""
+    config = load_scan_config()
+
+    batch = get_current_batch()
+    if batch is None:
+        universe = config["universe"]
+        size = config["batch_size"] or 0
+        count = int(math.ceil(len(universe) / size)) if size else 0
+        batch = {
+            "tickers": universe[:size],
+            "index": 1 if count else 0,
+            "count": count,
+            "universe_size": len(universe),
+        }
+
+    market_open = None
+    try:
+        market_open = get_market_data().is_market_open()
+    except Exception as exc:  # never fail status because Alpaca is unreachable
+        logger.warning("Could not read Alpaca clock for scan status: %s", exc)
+
+    return {
+        "enabled": config["enabled"],
+        "paused": is_paused(),
+        "watchlist": batch["tickers"],
+        "universe_size": batch["universe_size"],
+        "batch_index": batch["index"],
+        "batch_count": batch["count"],
+        "batch_size": config["batch_size"],
+        "interval_minutes": config["interval_minutes"],
+        "dry_run": config["dry_run"],
+        "skip_held": config["skip_held"],
+        "market_hours_only": config["market_hours_only"],
+        "market_open": market_open,
+        "worker_alive": worker_alive(),
+        "last_scan": get_last_scan(),
+        "next_run_at": get_next_run(),
+    }
+
+
+@app.post("/api/v1/scan/pause")
+def pause_scan_scheduler():
+    """Pauses scheduled scans only; the kill switch still halts all trading."""
+    pause_scans()
+    return {"paused": True}
+
+
+@app.post("/api/v1/scan/resume")
+def resume_scan_scheduler():
+    resume_scans()
+    return {"paused": False}
 
 
 @app.get("/api/v1/trades")

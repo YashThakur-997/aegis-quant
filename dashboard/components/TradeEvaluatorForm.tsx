@@ -16,7 +16,7 @@ import {
 const QUICK_PICKS = ["AAPL", "MSFT", "NVDA", "TSLA", "SPY"];
 
 const inputClass =
-  "w-full rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/30";
+  "w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none transition-colors focus:border-amber-500 focus:ring-2 focus:ring-amber-500/30";
 
 function Stat({
   label,
@@ -29,9 +29,7 @@ function Stat({
 }) {
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
-      <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-        {label}
-      </p>
+      <p className="text-xs text-zinc-500">{label}</p>
       <p className={`mt-1 font-mono text-sm font-semibold ${accent}`}>{value}</p>
     </div>
   );
@@ -42,18 +40,18 @@ function StatusBadge({ status }: { status: string }) {
     status === "SUCCESS" || status === "EXECUTED"
       ? "border-emerald-700/60 bg-emerald-900/30 text-emerald-300"
       : status === "DRY_RUN"
-        ? "border-sky-700/60 bg-sky-900/30 text-sky-300"
+        ? "border-zinc-700 bg-zinc-800 text-zinc-300"
         : status === "HOLD"
           ? "border-amber-700/60 bg-amber-900/30 text-amber-300"
           : status.includes("REJECT") || status.includes("ERROR")
             ? "border-red-800/70 bg-red-950/60 text-red-300"
-            : "border-indigo-700/60 bg-indigo-900/30 text-indigo-300";
+            : "border-zinc-700 bg-zinc-800 text-zinc-300";
 
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${palette}`}
+      className={`inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-medium ${palette}`}
     >
-      {status.replaceAll("_", " ")}
+      {status.replaceAll("_", " ").toLowerCase().replace(/(^|\s)\S/g, (letter) => letter.toUpperCase())}
     </span>
   );
 }
@@ -70,7 +68,7 @@ function DataContextStrip({ result }: { result: EvaluateResponse }) {
   const positive = context.daily_pnl_pct >= 0;
 
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-[11px] text-zinc-400">
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400">
       <span className="font-mono font-semibold text-zinc-200">
         {context.ticker}
       </span>
@@ -85,7 +83,7 @@ function DataContextStrip({ result }: { result: EvaluateResponse }) {
         {context.daily_pnl_pct.toFixed(2)}%
       </span>
       {context.dry_run ? (
-        <span className="rounded-full border border-sky-700/60 bg-sky-900/30 px-2 py-0.5 font-semibold uppercase tracking-[0.14em] text-sky-300">
+        <span className="rounded-full border border-zinc-700 bg-zinc-800 px-2 py-0.5 font-medium text-zinc-300">
           Dry run
         </span>
       ) : null}
@@ -178,30 +176,27 @@ export default function TradeEvaluatorForm() {
   const execution = result?.broker_execution;
 
   return (
-    <section className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 shadow-xl backdrop-blur">
+    <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-indigo-400">
-            Live Agent
+          <p className="text-xs font-semibold text-amber-500">
+            Agent evaluation
           </p>
-          <h2 className="mt-1 text-xl font-semibold text-zinc-100">
-            Run Evaluation
+          <h2 className="mt-1 text-xl font-medium text-zinc-100">
+            Evaluate a trade
           </h2>
           <p className="mt-1 text-sm text-zinc-400">
-            Pick a ticker — the agent fetches Alpaca bars, news, and account
+            Pick a ticker and the agent fetches Alpaca bars, news, and account
             equity, then runs the five-swimlane decision engine.
           </p>
         </div>
-        <span className="hidden rounded-full border border-zinc-800 bg-zinc-950/60 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.16em] text-zinc-500 sm:inline-flex">
-          POST /analyze/{"{ticker}"}
-        </span>
       </div>
 
       <form onSubmit={runAgent} className="mt-5 space-y-4">
         <div>
           <label
             htmlFor="ticker"
-            className="mb-1.5 block text-xs font-medium uppercase tracking-wider text-zinc-400"
+            className="mb-1.5 block text-xs font-medium text-zinc-400"
           >
             Ticker
           </label>
@@ -219,9 +214,9 @@ export default function TradeEvaluatorForm() {
                 key={symbol}
                 type="button"
                 onClick={() => setTicker(symbol)}
-                className={`rounded-full border px-2.5 py-1 font-mono text-[11px] transition ${
+                className={`rounded-md border px-2.5 py-1 font-mono text-xs transition-colors ${
                   ticker === symbol
-                    ? "border-indigo-500/60 bg-indigo-500/15 text-indigo-200"
+                    ? "border-amber-700 bg-amber-950/30 text-amber-300"
                     : "border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
                 }`}
               >
@@ -238,12 +233,12 @@ export default function TradeEvaluatorForm() {
                 type="checkbox"
                 checked={dryRun}
                 onChange={(event) => setDryRun(event.target.checked)}
-                className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 accent-indigo-500"
+                className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 accent-amber-500"
               />
               Dry run — decide without submitting an order
             </label>
             {!dryRun ? (
-              <p className="text-[11px] font-medium text-amber-300">
+              <p className="text-xs font-medium text-amber-300">
                 A live paper order will be submitted to Alpaca.
               </p>
             ) : null}
@@ -251,25 +246,25 @@ export default function TradeEvaluatorForm() {
           <button
             type="submit"
             disabled={submitting}
-            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-950/50 transition hover:bg-indigo-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-5 py-2.5 text-sm font-medium text-zinc-950 transition-colors hover:bg-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {submitting ? "Agent running…" : "Run Agent"}
+            {submitting ? "Running evaluation…" : "Run evaluation"}
           </button>
         </div>
       </form>
 
       <details className="mt-5 rounded-xl border border-zinc-800 bg-zinc-950/40">
-        <summary className="cursor-pointer select-none px-4 py-3 text-xs font-medium uppercase tracking-wider text-zinc-400 transition hover:text-zinc-200">
-          Advanced · manual simulation
+        <summary className="cursor-pointer select-none px-4 py-3 text-xs font-medium text-zinc-400 transition-colors hover:text-zinc-200">
+          Manual simulation
         </summary>
         <form onSubmit={runManual} className="space-y-4 border-t border-zinc-800 p-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label
                 htmlFor="manual-equity"
-                className="mb-1.5 block text-xs font-medium uppercase tracking-wider text-zinc-400"
+                className="mb-1.5 block text-xs font-medium text-zinc-400"
               >
-                Current Equity (USD)
+                Current equity (USD)
               </label>
               <input
                 id="manual-equity"
@@ -283,7 +278,7 @@ export default function TradeEvaluatorForm() {
               />
             </div>
             <div className="flex items-end">
-              <p className="text-[11px] leading-relaxed text-zinc-500">
+              <p className="text-xs leading-relaxed text-zinc-500">
                 120 synthetic OHLCV bars are generated from the ticker seed for
                 the regime and backtest lanes.
               </p>
@@ -293,9 +288,9 @@ export default function TradeEvaluatorForm() {
           <div>
             <label
               htmlFor="manual-news"
-              className="mb-1.5 block text-xs font-medium uppercase tracking-wider text-zinc-400"
+              className="mb-1.5 block text-xs font-medium text-zinc-400"
             >
-              News Summary
+              News summary
             </label>
             <textarea
               id="manual-news"
@@ -310,7 +305,7 @@ export default function TradeEvaluatorForm() {
           <button
             type="submit"
             disabled={submitting}
-            className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm font-semibold text-zinc-100 transition hover:bg-zinc-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm font-semibold text-zinc-100 transition-colors hover:bg-zinc-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {submitting ? "Evaluating…" : "Evaluate with synthetic data"}
           </button>
@@ -336,7 +331,7 @@ export default function TradeEvaluatorForm() {
               </span>
             ) : null}
             {result.trade_id ? (
-              <span className="font-mono text-[11px] text-zinc-500">
+              <span className="font-mono text-xs text-zinc-500">
                 #{result.trade_id.slice(0, 8)}
               </span>
             ) : null}
@@ -351,11 +346,11 @@ export default function TradeEvaluatorForm() {
           {signal ? (
             <div>
               <div className="flex flex-wrap items-center gap-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                  AI Verdict
+                <p className="text-xs font-semibold text-zinc-500">
+                  Agent verdict
                 </p>
                 <span
-                  className={`font-mono text-lg font-bold ${directionColor(
+                  className={`font-mono text-lg font-medium ${directionColor(
                     signal.direction
                   )}`}
                 >
@@ -373,7 +368,7 @@ export default function TradeEvaluatorForm() {
               </p>
               {signal.bull_catalysts?.length ? (
                 <div className="mt-3">
-                  <p className="text-[10px] uppercase tracking-[0.18em] text-emerald-400">
+                  <p className="text-xs text-emerald-400">
                     Bull Catalysts
                   </p>
                   <ul className="mt-1 list-disc space-y-1 pl-5 text-xs text-zinc-400">
@@ -385,7 +380,7 @@ export default function TradeEvaluatorForm() {
               ) : null}
               {signal.bear_risks?.length ? (
                 <div className="mt-3">
-                  <p className="text-[10px] uppercase tracking-[0.18em] text-red-400">
+                  <p className="text-xs text-red-400">
                     Bear Risks
                   </p>
                   <ul className="mt-1 list-disc space-y-1 pl-5 text-xs text-zinc-400">
@@ -400,15 +395,15 @@ export default function TradeEvaluatorForm() {
 
           {risk ? (
             <div>
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                Risk Metrics
+              <p className="mb-2 text-xs font-semibold text-zinc-500">
+                Risk metrics
               </p>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 border-l-2 border-amber-700 pl-4 sm:grid-cols-4">
                 <Stat label="Shares" value={formatNumber(risk.shares)} />
                 <Stat
                   label="Allocated"
                   value={formatCurrency(risk.allocated_capital)}
-                  accent="text-indigo-300"
+                  accent="text-amber-400"
                 />
                 <Stat
                   label="Stop Loss"
@@ -425,8 +420,8 @@ export default function TradeEvaluatorForm() {
 
           {report ? (
             <div>
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                VectorBT Validation
+              <p className="mb-2 text-xs font-semibold text-zinc-500">
+                VectorBT validation
               </p>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <Stat
@@ -451,8 +446,8 @@ export default function TradeEvaluatorForm() {
 
           {execution ? (
             <div>
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                Broker Execution
+              <p className="mb-2 text-xs font-semibold text-zinc-500">
+                Broker execution
               </p>
               <div className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
                 <span
@@ -464,12 +459,12 @@ export default function TradeEvaluatorForm() {
                   {execution.status ?? (execution.success ? "FILLED" : "FAILED")}
                 </span>
                 {execution.order_id ? (
-                  <span className="font-mono text-[11px] text-zinc-500">
+                  <span className="font-mono text-xs text-zinc-500">
                     order {execution.order_id}
                   </span>
                 ) : null}
                 {execution.status === "DRY_RUN" ? (
-                  <span className="text-xs text-sky-300">
+                  <span className="text-xs text-zinc-400">
                     no order submitted
                   </span>
                 ) : null}

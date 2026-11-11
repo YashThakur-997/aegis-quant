@@ -18,9 +18,6 @@ const config: Config = {
           "monospace",
         ],
       },
-      boxShadow: {
-        glow: "0 0 40px -10px rgba(99, 102, 241, 0.45)",
-      },
     },
   },
   plugins: [],

@@ -13,6 +13,7 @@ plotly==5.18.0
 vectorbt==0.26.2
 alpaca-py
 hmmlearn==0.3.2
+apscheduler==3.10.4
 # ta-lib==0.4.28
 python-dotenv==1.0.1
 requests==2.31.0

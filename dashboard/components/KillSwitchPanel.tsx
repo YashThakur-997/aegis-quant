@@ -34,20 +34,15 @@ export default function KillSwitchPanel() {
   const engaged = state === "success";
 
   return (
-    <section className="relative overflow-hidden rounded-2xl border border-red-900/60 bg-gradient-to-br from-red-950/50 via-zinc-900/70 to-zinc-900/70 p-6 shadow-xl">
-      <div className="pointer-events-none absolute -right-16 -top-16 h-40 w-40 rounded-full bg-red-600/20 blur-3xl" />
-
+    <section className="rounded-2xl border border-zinc-800 border-l-2 border-l-red-700 bg-zinc-900 p-6">
       <div className="flex items-center gap-2">
-        <span className="relative flex h-2.5 w-2.5">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-60" />
-          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
-        </span>
-        <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-red-400">
-          Emergency Control
+        <span className="h-2 w-2 rounded-full bg-red-500" />
+        <span className="text-xs font-medium text-red-400">
+          Emergency control
         </span>
       </div>
 
-      <h2 className="mt-3 text-xl font-semibold text-zinc-100">Kill-Switch</h2>
+      <h2 className="mt-3 text-xl font-medium text-zinc-100">Kill switch</h2>
       <p className="mt-1 text-sm leading-relaxed text-zinc-400">
         Trips the circuit breaker and freezes every downstream trade decision.
       </p>
@@ -56,13 +51,13 @@ export default function KillSwitchPanel() {
         type="button"
         onClick={fire}
         disabled={state === "loading" || engaged}
-        className="mt-6 w-full rounded-xl bg-red-600 px-4 py-4 text-sm font-bold uppercase tracking-[0.18em] text-white shadow-lg shadow-red-950/60 transition hover:bg-red-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300 disabled:cursor-not-allowed disabled:opacity-70"
+        className="mt-6 w-full rounded-lg border border-red-800 bg-zinc-950 px-4 py-3 text-sm font-medium text-red-300 transition-colors hover:bg-red-950/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:cursor-not-allowed disabled:opacity-70"
       >
         {state === "loading"
           ? "Engaging…"
           : engaged
-            ? "Lockout Engaged"
-            : "Trigger Kill-Switch"}
+            ? "Lockout engaged"
+            : "Trigger kill switch"}
       </button>
 
       {message ? (
@@ -77,7 +72,7 @@ export default function KillSwitchPanel() {
         </p>
       ) : null}
 
-      <p className="mt-4 text-[11px] text-zinc-500">
+      <p className="mt-4 text-xs text-zinc-500">
         POST /api/v1/kill-switch/trigger
       </p>
     </section>

@@ -83,6 +83,44 @@ export type KillSwitchResponse = {
   reason: string;
 };
 
+export type ScanResult = {
+  ticker: string;
+  status: string;
+  action?: string | null;
+  trade_id?: string | null;
+  detail?: string | null;
+};
+
+export type ScanSummary = {
+  started_at: string;
+  finished_at: string;
+  skipped?: string;
+  dry_run?: boolean;
+  watchlist?: string[];
+  batch_index?: number;
+  batch_count?: number;
+  universe_size?: number;
+  results: ScanResult[];
+};
+
+export type ScanStatus = {
+  enabled: boolean;
+  paused: boolean;
+  watchlist: string[];
+  universe_size: number;
+  batch_index: number;
+  batch_count: number;
+  batch_size: number;
+  interval_minutes: number;
+  dry_run: boolean;
+  skip_held: boolean;
+  market_hours_only: boolean;
+  market_open: boolean | null;
+  worker_alive: boolean;
+  last_scan: ScanSummary | null;
+  next_run_at: string | null;
+}
+
 export type OhlcvRow = {
   open: number;
   high: number;
@@ -159,6 +197,22 @@ export function triggerKillSwitch(reason: string): Promise<KillSwitchResponse> {
 
 export function fetchJournals(limit = 50): Promise<JournalEntry[]> {
   return request<JournalEntry[]>(`/api/v1/journals?limit=${limit}`);
+}
+
+export function fetchScanStatus(): Promise<ScanStatus> {
+  return request<ScanStatus>("/api/v1/scan/status");
+}
+
+export function pauseScanner(): Promise<{ paused: boolean }> {
+  return request<{ paused: boolean }>("/api/v1/scan/pause", {
+    method: "POST",
+  });
+}
+
+export function resumeScanner(): Promise<{ paused: boolean }> {
+  return request<{ paused: boolean }>("/api/v1/scan/resume", {
+    method: "POST",
+  });
 }
 
 function hashString(value: string): number {
