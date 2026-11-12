@@ -16,6 +16,11 @@ export type VectorbtReport = {
   benchmark_sharpe_ratio: number | null;
   strategy_max_drawdown_pct: number | null;
   validation_status: string;
+  strategy?: string;
+  evaluation_method?: string;
+  validation_bars?: number;
+  fee_bps?: number;
+  slippage_bps?: number;
 };
 
 export type RiskAllocation = {
@@ -23,7 +28,11 @@ export type RiskAllocation = {
   shares?: number;
   allocated_capital?: number;
   stop_loss_price?: number;
+  take_profit_price?: number;
   risk_percentage?: number;
+  risk_budget?: number;
+  actual_risk?: number;
+  buying_power?: number;
   guardrail_status?: string;
   reason?: string;
 };
@@ -35,6 +44,10 @@ export type BrokerExecution = {
   shares?: number;
   side?: string;
   status?: string;
+  mode?: "PAPER_ALPACA" | "SIMULATED";
+  stop_order_id?: string | null;
+  protective_stop_price?: number;
+  protective_stop_attached?: boolean;
   error?: string;
 };
 
@@ -46,6 +59,7 @@ export type DataContext = {
   news_count: number;
   equity: number;
   daily_pnl_pct: number;
+  buying_power?: number;
   dry_run: boolean;
 };
 
@@ -54,6 +68,7 @@ export type EvaluateResponse = {
   reason?: string;
   details?: string;
   regime?: string;
+  strategy?: string;
   vectorbt_validation?: VectorbtReport;
   trade_signal?: TradeSignal;
   risk_allocation?: RiskAllocation;
@@ -73,6 +88,12 @@ export type JournalEntry = {
   regime: string | null;
   conviction: number | null;
   status: string;
+  strategy?: string | null;
+  risk_budget?: number | null;
+  broker_mode?: string | null;
+  broker_order_id?: string | null;
+  broker_stop_order_id?: string | null;
+  broker_status?: string | null;
   plain_language_reasoning: string | null;
   bull_catalysts: string[];
   bear_risks: string[];
@@ -81,6 +102,12 @@ export type JournalEntry = {
 export type KillSwitchResponse = {
   status: string;
   reason: string;
+  cancellation_result?: {
+    mode: string;
+    attempted: number;
+    cancelled: number;
+    failures: Array<{ order_id?: string; error: string }>;
+  };
 };
 
 export type ScanResult = {

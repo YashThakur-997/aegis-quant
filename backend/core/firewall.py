@@ -6,7 +6,7 @@ class TemporalFirewall:
     """
     Swimlane 1: Data Ingestion & Temporal Firewall
     Anonymizes market tickers and normalizes price series to Base-100
-    to prevent LLM pre-training memory look-ahead bias.
+    to reduce ticker anchoring in the LLM review.
     """
     
     @staticmethod

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 
 import ScannerSettings from "@/components/ScannerSettings";
 import {
@@ -67,22 +68,31 @@ export default function ScannerStatus() {
   }, [load]);
 
   async function toggle() {
-    if (!status) return;
+    if (!status || toggling) return;
+    const willPause = !status.paused;
     setToggling(true);
     setError("");
     try {
-      if (status.paused) {
-        await resumeScanner();
-      } else {
+      if (willPause) {
         await pauseScanner();
+        toast.info("Scanner paused", {
+          description: "Scheduled sweeps are on hold.",
+        });
+      } else {
+        await resumeScanner();
+        toast.success("Scanner resumed", {
+          description: "Scheduled sweeps are active.",
+        });
       }
       await load(false);
+      window.dispatchEvent(new Event("aegis:system-updated"));
     } catch (requestError) {
-      setError(
+      const detail =
         requestError instanceof Error
           ? requestError.message
-          : "Unable to change scanner state."
-      );
+          : "Unable to change scanner state.";
+      setError(detail);
+      toast.error("Scanner update failed", { description: detail });
     } finally {
       setToggling(false);
     }
@@ -126,7 +136,8 @@ export default function ScannerStatus() {
           type="button"
           onClick={() => void toggle()}
           disabled={!status || toggling}
-          className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+          aria-label={paused ? "Resume scanner" : "Pause scanner"}
+          className={`shrink-0 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
             paused
               ? "border-emerald-700 bg-emerald-900/40 text-emerald-200 hover:border-emerald-500"
               : "border-zinc-700 bg-zinc-950/60 text-zinc-300 hover:border-amber-500 hover:text-amber-300"
@@ -137,37 +148,40 @@ export default function ScannerStatus() {
       </div>
 
       {loading && !status ? (
-        <p className="mt-4 text-xs text-zinc-500">Loading scanner state…</p>
+        <p className="mt-4 text-xs text-zinc-400">Loading scanner state…</p>
       ) : null}
 
       {error ? (
-        <p className="mt-4 rounded-lg border border-red-800/70 bg-red-950/50 px-3 py-2 text-xs text-red-300">
+        <p
+          role="alert"
+          className="mt-4 break-words rounded-lg border border-red-800/70 bg-red-950/50 px-3 py-2 text-xs text-red-300"
+        >
           {error}
         </p>
       ) : null}
 
       {status ? (
         <>
-          <dl className="mt-5 grid grid-cols-2 gap-3 text-xs">
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2">
-              <dt className="text-xs text-zinc-500">Interval</dt>
+          <dl className="mt-5 grid grid-cols-1 gap-3 text-xs min-[360px]:grid-cols-2">
+            <div className="min-w-0 rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2">
+              <dt className="text-xs text-zinc-400">Interval</dt>
               <dd className="mt-1 font-mono text-zinc-200">
                 {status.interval_minutes} min
               </dd>
             </div>
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2">
-              <dt className="text-xs text-zinc-500">Mode</dt>
+            <div className="min-w-0 rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2">
+              <dt className="text-xs text-zinc-400">Mode</dt>
               <dd className="mt-1 font-mono text-zinc-200">
                 {status.dry_run ? "Dry run" : "Live paper"}
               </dd>
             </div>
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2">
-              <dt className="text-xs text-zinc-500">Market</dt>
+            <div className="min-w-0 rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2">
+              <dt className="text-xs text-zinc-400">Market</dt>
               <dd className="mt-1 font-mono text-zinc-200">{marketLabel}</dd>
             </div>
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2">
-              <dt className="text-xs text-zinc-500">Next sweep</dt>
-              <dd className="mt-1 font-mono text-zinc-200">
+            <div className="min-w-0 rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2">
+              <dt className="text-xs text-zinc-400">Next sweep</dt>
+              <dd className="mt-1 break-words font-mono text-zinc-200">
                 {paused ? "—" : formatTimestamp(status.next_run_at)}
               </dd>
             </div>
@@ -184,18 +198,18 @@ export default function ScannerStatus() {
             ))}
           </div>
 
-          <p className="mt-2 font-mono text-xs text-zinc-500">
+          <p className="mt-2 font-mono text-xs text-zinc-400">
             Batch {status.batch_index}/{status.batch_count} ·{" "}
             {status.universe_size}-symbol universe · rotates each sweep
           </p>
 
           <div className="mt-5 border-t border-zinc-800 pt-4">
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-zinc-400">
               Last sweep · {lastScan ? formatTimestamp(lastScan.started_at) : "—"}
             </p>
 
             {!lastScan ? (
-              <p className="mt-2 text-xs text-zinc-500">
+              <p className="mt-2 text-xs text-zinc-400">
                 No scans recorded yet.
               </p>
             ) : lastScan.skipped ? (
@@ -203,25 +217,27 @@ export default function ScannerStatus() {
                 Skipped: {lastScan.skipped}
               </p>
             ) : lastScan.results.length === 0 ? (
-              <p className="mt-2 text-xs text-zinc-500">
+              <p className="mt-2 text-xs text-zinc-400">
                 Scan finished with no results.
               </p>
             ) : (
               <ul className="mt-2 space-y-1.5">
-                {lastScan.results.map((result) => (
+                {lastScan.results.map((result, index) => (
                   <li
-                    key={`${result.ticker}-${result.status}`}
+                    key={`${result.ticker}-${result.status}-${index}`}
                     className="flex items-center justify-between gap-2"
                   >
-                    <span className="font-mono text-xs font-semibold text-zinc-200">
+                    <span className="min-w-0 truncate font-mono text-xs font-semibold text-zinc-200">
                       {result.ticker}
                       {result.action ? (
-                        <span className="ml-2 text-xs font-normal text-zinc-500">
+                        <span className="ml-2 text-xs font-normal text-zinc-400">
                           {result.action}
                         </span>
                       ) : null}
                     </span>
-                    <ResultPill status={result.status} />
+                    <span className="shrink-0">
+                      <ResultPill status={result.status} />
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -234,13 +250,18 @@ export default function ScannerStatus() {
             ) : null}
 
             {status.skip_held ? (
-              <p className="mt-3 text-xs text-zinc-600">
+              <p className="mt-3 text-xs text-zinc-400">
                 Skips tickers with an open position (exit automation off).
               </p>
             ) : null}
           </div>
 
-          <ScannerSettings onSaved={() => void load(false)} />
+          <ScannerSettings
+            onSaved={() => {
+              void load(false);
+              window.dispatchEvent(new Event("aegis:system-updated"));
+            }}
+          />
         </>
       ) : null}
     </section>

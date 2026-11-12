@@ -8,7 +8,7 @@ An autonomous, risk-guarded paper-trading desk. Aegis-Quant combines a temporal 
 
 - **Five-stage decision pipeline** with the LLM kept away from position sizing.
 - **Adversarial debate** using LangGraph: a Bull agent, a Bear agent, and a Judge agent.
-- **Deterministic guardrails**: hard daily-loss circuit breaker, fractional Kelly sizing, 2x ATR stops.
+- **Deterministic guardrails**: hard daily-loss circuit breaker, risk-budget sizing, ATR exits, and broker-managed paper bracket orders.
 - **Live scanner**: static watchlist or Alpaca most-active universe, batched rotation, configurable from the dashboard.
 - **Full audit trail**: every HOLD, dry run, rejection, and execution is journaled in Postgres.
 - **Operations UI**: pipeline progress, regime/backtest view, journal analytics, CSV export, kill switch, worker health, scanner controls.
@@ -51,9 +51,9 @@ An autonomous, risk-guarded paper-trading desk. Aegis-Quant combines a temporal 
 `backend/core/pipeline.py` runs one evaluation end to end:
 
 1. **Temporal firewall** (`firewall.py`) anonymizes the ticker and normalizes prices before any model sees the data.
-2. **Regime router** (`router.py`) fits an HMM to daily bars, classifies the current regime, and produces a VectorBT validation report.
+2. **Regime router** (`router.py`) uses completed-bar trend/volatility features to select a deterministic policy and produces a next-bar, cost-aware VectorBT walk-forward report.
 3. **Adversarial debate** (`agents.py`) asks Bull and Bear agents to argue the setup, then a Judge emits `BUY`, `SELL`, or `HOLD` with conviction, reasoning, catalysts, and risks.
-4. **Deterministic risk engine** (`risk_engine.py`) checks the Redis kill switch and the daily drawdown cap, then sizes the trade with quarter Kelly, capped at 2% of equity, with a 2x ATR stop. Negative-edge setups are rejected.
+4. **Deterministic risk engine** (`risk_engine.py`) checks the Redis kill switch and daily drawdown cap, then sizes from a 2% cash-at-risk budget, stop distance, buying power, and a 10% max-notional cap. It sends 2x-ATR stops with a 2R take-profit target.
 5. **Execution and audit** (`broker.py`, `pipeline.py`) submits an Alpaca paper market order (or a mock fill when broker keys are absent) and writes the outcome to the `trade_journals` table.
 
 The scanner reuses the same pipeline, so scheduled and manual evaluations behave identically.
@@ -220,7 +220,7 @@ curl.exe -X POST http://localhost:8000/api/v1/evaluate-trade `
   --data-binary "@payload.json"
 ```
 
-Responses use `status` values such as `HOLD`, `DRY_RUN`, `REJECTED_BY_RISK_ENGINE`, and `SUCCESS`, and include the regime, VectorBT report, trade signal, risk allocation, broker result, and journal `trade_id`.
+Responses use `status` values such as `HOLD`, `DRY_RUN`, `REJECTED_BY_RISK_ENGINE`, `PAPER_SUBMITTED`, and `SIMULATED`, and include the regime, strategy, VectorBT report, trade signal, risk allocation, broker result, and journal `trade_id`.
 
 ### Update scanner settings
 
@@ -263,7 +263,7 @@ Reset it deliberately after reviewing the account:
 docker exec aegis-redis redis-cli DEL AEGIS_KILL_SWITCH_ENGAGED AEGIS_KILL_REASON
 ```
 
-The kill switch halts new evaluations. It does not liquidate positions or cancel existing orders. Stop-loss prices are calculated and journaled, but currently they are not submitted to Alpaca as resting stop orders.
+The kill switch halts new evaluations and attempts to cancel all open Alpaca paper orders. It does not liquidate existing positions. Approved paper trades use broker-managed bracket exits: a protective stop and a 2R take-profit target. Offline mode is always labeled `SIMULATED_NOT_SUBMITTED`; it never represents a broker fill.
 
 Pausing the scanner is separate from the kill switch: pausing only stops scheduled sweeps, while the kill switch blocks every trading path.
 
@@ -279,7 +279,7 @@ Pausing the scanner is separate from the kill switch: pausing only stops schedul
 │   │   ├── firewall.py         Ticker anonymization and price normalization
 │   │   ├── router.py           HMM regime detection and VectorBT validation
 │   │   ├── agents.py           LangGraph Bull/Bear/Judge debate
-│   │   ├── risk_engine.py      Kelly sizing, ATR stops, kill switch
+│   │   ├── risk_engine.py      risk-budget sizing, ATR exits, kill switch
 │   │   ├── broker.py           Alpaca paper execution and mock fallback
 │   │   ├── market_data.py      Bars, news, account, clock, screener
 │   │   ├── scan_config.py      Environment + Redis config merge
@@ -334,7 +334,11 @@ $env:NEXT_PUBLIC_API_BASE_URL = "http://localhost:8000"
 npm run dev
 ```
 
-The backend CORS policy allows any `http://localhost:<port>` or `http://127.0.0.1:<port>` origin. There is no automated test suite; use the API docs, scanner status, worker logs, and a dry-run analysis to verify changes.
+The backend CORS policy allows any `http://localhost:<port>` or `http://127.0.0.1:<port>` origin. Run the deterministic risk, broker, and no-look-ahead tests with `python -m pytest backend/tests -q`. The router tests need the Docker image's VectorBT runtime.
+
+## Hackathon demo fixture
+
+`python -m backend.demo_fixture` prints a reproducible NVDA payload for the manual `/api/v1/evaluate-trade` route. Use it to demonstrate the regime strategy, next-bar walk-forward report, risk budget, journal record, bracket submission, and kill-switch cancellation without relying on an external price feed.
 
 ## Troubleshooting
 
@@ -357,5 +361,5 @@ The backend CORS policy allows any `http://localhost:<port>` or `http://127.0.0.
 - `.env` is ignored by Git. Do not commit real keys; rotate any credential that has been shared or logged.
 - Agent output can be wrong. Deterministic guardrails limit size and daily loss, but they do not guarantee profitability.
 - The scanner is a single worker process with Redis-based locking. It is not a horizontally scaled job system.
-- Stops are advisory/journal-only at present; there is no automated exit engine or resting stop order.
+- Paper execution uses Alpaca bracket exits when credentials are configured. The app remains a paper-only prototype and does not liquidate existing positions on a kill switch.
 - The dashboard currently uses Next.js 14. `npm audit` reports advisories that require a breaking major upgrade.

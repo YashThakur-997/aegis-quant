@@ -150,6 +150,7 @@ def run_scan(
                     news_summary=news["summary"],
                     current_equity=snapshot["equity"],
                     current_daily_pnl=snapshot["daily_pnl_pct"],
+                    buying_power=snapshot["buying_power"],
                 )
 
                 db = SessionLocal()

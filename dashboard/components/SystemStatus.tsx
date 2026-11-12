@@ -40,30 +40,35 @@ export default function SystemStatus() {
     const interval = window.setInterval(() => {
       void load();
     }, 10000);
+    const onSystemUpdated = () => {
+      void load();
+    };
+    window.addEventListener("aegis:system-updated", onSystemUpdated);
 
     return () => {
       active = false;
       window.clearInterval(interval);
+      window.removeEventListener("aegis:system-updated", onSystemUpdated);
     };
   }, []);
 
-  let label = "Connecting…";
-  let detail = "Reading backend state";
+  let label = "Checking desk status";
+  let detail = "Reading system state";
   let dot = "bg-zinc-500";
   let tone = "text-zinc-300";
 
   if (killEngaged) {
-    label = "Kill-switch engaged";
-    detail = "All trading halted";
+    label = "Trading halted";
+    detail = "Emergency stop is engaged";
     dot = "bg-red-500";
     tone = "text-red-300";
   } else if (error && !status) {
-    label = "API unreachable";
+    label = "Desk offline";
     detail = error;
     dot = "bg-red-500";
     tone = "text-red-300";
   } else if (status && !status.worker_alive) {
-    label = "Worker offline";
+    label = "Scanner offline";
     detail = "No heartbeat detected";
     dot = "bg-red-500";
     tone = "text-red-300";
@@ -73,12 +78,12 @@ export default function SystemStatus() {
     dot = "bg-amber-400";
     tone = "text-amber-300";
   } else if (status?.dry_run) {
-    label = "Dry run";
+    label = "Review mode";
     detail = "No paper orders are sent";
-    dot = "bg-amber-400";
-    tone = "text-amber-300";
+    dot = "bg-blue-400";
+    tone = "text-zinc-300";
   } else if (status) {
-    label = "Autonomous mode";
+    label = "Scanner active";
     detail =
       status.market_open === false
         ? "Scanner live · market closed"
@@ -87,19 +92,19 @@ export default function SystemStatus() {
     tone = "text-zinc-300";
   }
 
-  const pulsing = label === "Autonomous mode" && !status?.paused;
-
   return (
     <div
+      role="status"
+      aria-live="polite"
       title={detail}
-      className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/80 px-3 py-2 backdrop-blur-md"
+      className="flex items-center gap-2 rounded-lg border border-white/[0.08] bg-[#13151a] px-3 py-2"
     >
       <span
-        className={`h-2 w-2 rounded-full ${dot} ${pulsing ? "animate-pulse" : ""}`}
+        className={`h-2 w-2 rounded-full ${dot}`}
       />
       <div className="leading-tight">
         <span className={`text-sm ${tone}`}>{label}</span>
-        <span className="hidden text-[10px] text-zinc-500 sm:block">
+        <span className="hidden text-[10px] text-zinc-400 sm:block">
           {detail}
         </span>
       </div>

@@ -14,7 +14,7 @@ from alpaca.trading.client import TradingClient
 
 logger = logging.getLogger(__name__)
 
-# Leveraged/inverse products distort the HMM regime and Kelly sizing, so the
+# Leveraged/inverse products distort the regime and risk-budget calculations, so the
 # dynamic universe excludes the most common ones even when they top the tape.
 _EXCLUDED_LEVERAGED = {
     "BULZ",
@@ -110,12 +110,14 @@ class AlpacaMarketData:
                 ) from exc
 
             equity = float(account.equity)
+            buying_power = float(account.buying_power or equity)
             last_equity = float(account.last_equity or equity)
             daily_pnl_pct = (
                 0.0 if last_equity <= 0 else (equity - last_equity) / last_equity
             )
             return {
                 "equity": equity,
+                "buying_power": buying_power,
                 "last_equity": last_equity,
                 "daily_pnl_pct": daily_pnl_pct,
             }

@@ -21,3 +21,10 @@ class TradeJournalModel(Base):
     bull_catalysts = Column(Text)  # Stored as JSON or comma-separated string
     bear_risks = Column(Text)
     status = Column(String)  # EXECUTED, REJECTED, KILLED
+    strategy = Column(String)
+    risk_budget = Column(Float)
+    broker_mode = Column(String)
+    broker_order_id = Column(String)
+    broker_stop_order_id = Column(String)
+    broker_status = Column(String)
+    broker_response = Column(Text)
