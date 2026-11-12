@@ -2,35 +2,29 @@
 @tailwind components;
 @tailwind utilities;
 
+html {
+  scroll-behavior: smooth;
+}
+
 html,
 body {
   min-height: 100%;
+  overflow-x: hidden;
 }
 
 body {
-  @apply bg-zinc-950 text-zinc-100 antialiased;
-  background-image:
-    radial-gradient(
-      ellipse 80% 50% at 15% -10%,
-      rgba(245, 158, 11, 0.07),
-      transparent 60%
-    ),
-    radial-gradient(
-      ellipse 70% 50% at 90% 10%,
-      rgba(16, 185, 129, 0.05),
-      transparent 60%
-    );
-  background-attachment: fixed;
+  @apply bg-[#0c0d10] text-zinc-100 antialiased;
+  font-feature-settings: "tnum" 1, "ss01" 1;
 }
 
 @layer components {
-  .glass-panel {
-    @apply rounded-2xl border border-zinc-800 bg-zinc-950/80 shadow-xl backdrop-blur-md;
-  }
+  .desk-panel { @apply rounded-xl border border-white/[0.08] bg-[#13151a]; }
+  .glass-panel { @apply desk-panel; }
+  .desk-label { @apply text-xs font-medium text-zinc-400; }
 }
 
 ::selection {
-  background-color: rgba(217, 119, 6, 0.32);
+  background-color: rgba(59, 130, 246, 0.32);
 }
 
 ::-webkit-scrollbar {
@@ -39,19 +33,19 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #09090b;
+  background: #0c0d10;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background: #343842;
   border-radius: 6px;
 }
 
 :focus-visible {
-  outline: 2px solid #d97706;
-  outline-offset: 2px;
+  outline: 2px solid #60a5fa;
+  outline-offset: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
+  background: #4b5260;
 }

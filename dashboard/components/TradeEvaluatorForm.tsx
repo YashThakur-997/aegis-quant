@@ -19,9 +19,10 @@ import {
 } from "@/lib/api";
 
 const QUICK_PICKS = ["AAPL", "MSFT", "NVDA", "TSLA", "SPY"];
+const TICKER_PATTERN = /^[A-Z0-9.-]{1,10}$/;
 
 const inputClass =
-  "w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none transition-colors focus:border-amber-500 focus:ring-2 focus:ring-amber-500/30";
+  "w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-500 outline-none transition-colors focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 disabled:cursor-not-allowed disabled:opacity-60";
 
 function Stat({
   label,
@@ -34,7 +35,7 @@ function Stat({
 }) {
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
-      <p className="text-xs text-zinc-500">{label}</p>
+      <p className="text-xs text-zinc-400">{label}</p>
       <p className={`mt-1 font-mono text-sm font-semibold ${accent}`}>{value}</p>
     </div>
   );
@@ -42,9 +43,9 @@ function Stat({
 
 function StatusBadge({ status }: { status: string }) {
   const palette =
-    status === "SUCCESS" || status === "EXECUTED"
+    status === "SUCCESS" || status === "EXECUTED" || status === "PAPER_SUBMITTED"
       ? "border-emerald-700/60 bg-emerald-900/30 text-emerald-300"
-      : status === "DRY_RUN"
+      : status === "DRY_RUN" || status === "SIMULATED"
         ? "border-zinc-700 bg-zinc-800 text-zinc-300"
         : status === "HOLD"
           ? "border-amber-700/60 bg-amber-900/30 text-amber-300"
@@ -122,14 +123,21 @@ export default function TradeEvaluatorForm() {
     return () => window.clearInterval(interval);
   }, [submitting]);
 
-  function notifyOutcome(response: EvaluateResponse) {
-    const symbol = response.data_context?.ticker ?? ticker;
+  function notifyOutcome(response: EvaluateResponse, submittedSymbol: string) {
+    const symbol = response.data_context?.ticker ?? submittedSymbol;
     const direction = response.trade_signal?.direction ?? "HOLD";
 
-    if (response.status === "SUCCESS" || response.status === "EXECUTED") {
-      toast.success(`${symbol} ${direction} submitted`, {
-        description: `Broker status ${response.status} · paper account`,
-      });
+    if (response.status === "PAPER_SUBMITTED" || response.status === "SIMULATED") {
+      if (response.broker_execution?.success === false) {
+        toast.error(`${symbol} ${direction} order failed`, {
+          description:
+            response.broker_execution.error ?? "Broker execution failed.",
+        });
+      } else {
+        toast.success(`${symbol} ${direction} ${response.status === "SIMULATED" ? "simulated" : "submitted"}`, {
+          description: response.status === "SIMULATED" ? "Offline simulation only; no broker order was sent." : "Protective stop submitted to Alpaca paper.",
+        });
+      }
     } else if (response.status === "DRY_RUN") {
       toast.info(`${symbol} · ${direction} (dry run)`, {
         description: "Decision journaled. No order was sent.",
@@ -137,6 +145,11 @@ export default function TradeEvaluatorForm() {
     } else if (response.status === "HOLD") {
       toast.info(`${symbol} · holding`, {
         description: "Agent consensus was to stand down.",
+      });
+    } else if (response.status === "REJECTED_BY_RISK_ENGINE") {
+      toast.warning(`${symbol} rejected by risk guardrails`, {
+        description:
+          response.details ?? response.reason ?? "Trade did not pass risk checks.",
       });
     }
   }
@@ -160,15 +173,28 @@ export default function TradeEvaluatorForm() {
     }
   }
 
-  async function runAgent(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError("");
-
-    const symbol = ticker.trim().toUpperCase();
+  function validateSymbol(raw: string): string | null {
+    const symbol = raw.trim().toUpperCase();
     if (!symbol) {
       setError("Ticker is required.");
-      return;
+      return null;
     }
+    if (!TICKER_PATTERN.test(symbol)) {
+      setError(
+        "Enter a valid ticker symbol (1–10 letters, numbers, dots, or hyphens)."
+      );
+      return null;
+    }
+    return symbol;
+  }
+
+  async function runAgent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (submitting) return;
+    setError("");
+
+    const symbol = validateSymbol(ticker);
+    if (!symbol) return;
 
     setSubmitting(true);
     setResult(null);
@@ -176,7 +202,8 @@ export default function TradeEvaluatorForm() {
     try {
       const response = await analyzeTicker(symbol, dryRun);
       setResult(response);
-      notifyOutcome(response);
+      notifyOutcome(response, symbol);
+      window.dispatchEvent(new Event("aegis:journal-updated"));
     } catch (requestError) {
       notifyError(requestError, "Agent run failed.");
     } finally {
@@ -186,21 +213,19 @@ export default function TradeEvaluatorForm() {
 
   async function runManual(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submitting) return;
     setError("");
 
-    const symbol = ticker.trim().toUpperCase();
-    const equityValue = Number(manualEquity);
+    const symbol = validateSymbol(ticker);
+    if (!symbol) return;
 
-    if (!symbol) {
-      setError("Ticker is required.");
+    const equityValue = Number(manualEquity);
+    if (!Number.isFinite(equityValue) || equityValue <= 0) {
+      setError("Current equity must be a positive number.");
       return;
     }
     if (!manualNews.trim()) {
       setError("News summary is required for manual evaluation.");
-      return;
-    }
-    if (!Number.isFinite(equityValue) || equityValue <= 0) {
-      setError("Current equity must be a positive number.");
       return;
     }
 
@@ -216,7 +241,8 @@ export default function TradeEvaluatorForm() {
         historical_data: buildHistoricalData(symbol, 120),
       });
       setResult(response);
-      notifyOutcome(response);
+      notifyOutcome(response, symbol);
+      window.dispatchEvent(new Event("aegis:journal-updated"));
     } catch (requestError) {
       notifyError(requestError, "Trade evaluation failed.");
     } finally {
@@ -233,7 +259,7 @@ export default function TradeEvaluatorForm() {
     <section className="glass-panel p-4 sm:p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold text-amber-500">
+          <p className="text-xs font-medium text-blue-300">
             Agent evaluation
           </p>
           <h2 className="mt-1 text-xl font-medium text-zinc-100">
@@ -246,7 +272,7 @@ export default function TradeEvaluatorForm() {
         </div>
       </div>
 
-      <form onSubmit={runAgent} className="mt-5 space-y-4">
+      <form onSubmit={runAgent} noValidate className="mt-5 space-y-4">
         <div>
           <label
             htmlFor="ticker"
@@ -257,20 +283,31 @@ export default function TradeEvaluatorForm() {
           <input
             id="ticker"
             value={ticker}
-            onChange={(event) => setTicker(event.target.value.toUpperCase())}
+            onChange={(event) => {
+              setTicker(event.target.value.toUpperCase());
+              if (error) setError("");
+            }}
+            disabled={submitting}
             placeholder="AAPL"
+            aria-invalid={Boolean(error && error.toLowerCase().includes("ticker"))}
+            aria-describedby={error ? "evaluator-error" : undefined}
             className={`${inputClass} font-mono uppercase`}
-            maxLength={8}
+            maxLength={10}
           />
           <div className="mt-2 flex flex-wrap gap-2">
             {QUICK_PICKS.map((symbol) => (
               <button
                 key={symbol}
                 type="button"
-                onClick={() => setTicker(symbol)}
-                className={`rounded-md border px-2.5 py-1 font-mono text-xs transition-colors ${
+                disabled={submitting}
+                aria-pressed={ticker === symbol}
+                onClick={() => {
+                  setTicker(symbol);
+                  if (error) setError("");
+                }}
+                className={`rounded-md border px-2.5 py-1 font-mono text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                   ticker === symbol
-                    ? "border-amber-700 bg-amber-950/30 text-amber-300"
+                    ? "border-blue-500/60 bg-blue-500/10 text-blue-200"
                     : "border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
                 }`}
               >
@@ -286,21 +323,22 @@ export default function TradeEvaluatorForm() {
               <input
                 type="checkbox"
                 checked={dryRun}
+                disabled={submitting}
                 onChange={(event) => setDryRun(event.target.checked)}
-                className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 accent-amber-500"
+                className="h-4 w-4 shrink-0 rounded border-zinc-700 bg-zinc-950 accent-blue-400"
               />
               Dry run — decide without submitting an order
             </label>
             {!dryRun ? (
-              <p className="text-xs font-medium text-amber-300">
-                A live paper order will be submitted to Alpaca.
+              <p className="text-xs font-medium text-blue-200">
+                A paper-only Alpaca bracket order with a protective stop will be submitted.
               </p>
             ) : null}
           </div>
           <button
             type="submit"
             disabled={submitting}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-100 px-5 py-2.5 text-sm font-medium text-zinc-950 transition-colors hover:bg-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-100 px-5 py-2.5 text-sm font-medium text-zinc-950 transition-colors hover:bg-zinc-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
           >
             {submitting ? "Running evaluation…" : "Run evaluation"}
           </button>
@@ -317,7 +355,11 @@ export default function TradeEvaluatorForm() {
         <summary className="cursor-pointer select-none px-4 py-3 text-xs font-medium text-zinc-400 transition-colors hover:text-zinc-200">
           Manual simulation
         </summary>
-        <form onSubmit={runManual} className="space-y-4 border-t border-zinc-800 p-4">
+        <form
+          onSubmit={runManual}
+          noValidate
+          className="space-y-4 border-t border-zinc-800 p-4"
+        >
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label
@@ -331,14 +373,19 @@ export default function TradeEvaluatorForm() {
                 type="number"
                 min="1"
                 step="0.01"
+                disabled={submitting}
                 value={manualEquity}
-                onChange={(event) => setManualEquity(event.target.value)}
+                onChange={(event) => {
+                  setManualEquity(event.target.value);
+                  if (error) setError("");
+                }}
+                aria-invalid={Boolean(error && error.toLowerCase().includes("equity"))}
                 placeholder="10000"
                 className={`${inputClass} font-mono`}
               />
             </div>
             <div className="flex items-end">
-              <p className="text-xs leading-relaxed text-zinc-500">
+              <p className="text-xs leading-relaxed text-zinc-400">
                 120 synthetic OHLCV bars are generated from the ticker seed for
                 the regime and backtest lanes.
               </p>
@@ -354,8 +401,13 @@ export default function TradeEvaluatorForm() {
             </label>
             <textarea
               id="manual-news"
+              disabled={submitting}
               value={manualNews}
-              onChange={(event) => setManualNews(event.target.value)}
+              onChange={(event) => {
+                setManualNews(event.target.value);
+                if (error) setError("");
+              }}
+              aria-invalid={Boolean(error && error.toLowerCase().includes("news"))}
               rows={3}
               placeholder="Company beats earnings, raises guidance amid resilient demand…"
               className={`${inputClass} resize-y`}
@@ -365,7 +417,7 @@ export default function TradeEvaluatorForm() {
           <button
             type="submit"
             disabled={submitting}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm font-semibold text-zinc-100 transition-colors hover:bg-zinc-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm font-semibold text-zinc-100 transition-colors hover:bg-zinc-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
           >
             {submitting ? "Evaluating…" : "Evaluate with synthetic data"}
           </button>
@@ -373,7 +425,11 @@ export default function TradeEvaluatorForm() {
       </details>
 
       {error ? (
-        <p className="mt-4 rounded-lg border border-red-800/70 bg-red-950/50 px-3 py-2 text-xs font-medium text-red-300">
+        <p
+          id="evaluator-error"
+          role="alert"
+          className="mt-4 break-words rounded-lg border border-red-800/70 bg-red-950/50 px-3 py-2 text-xs font-medium text-red-300"
+        >
           {error}
         </p>
       ) : null}
@@ -383,22 +439,35 @@ export default function TradeEvaluatorForm() {
           <DataContextStrip result={result} />
 
           <div className="flex flex-wrap items-center gap-3">
-            <StatusBadge status={result.status} />
+            <StatusBadge
+              status={
+                (result.status === "SUCCESS" || result.status === "EXECUTED") &&
+                execution?.success === false
+                  ? "ORDER_FAILED"
+                  : result.status
+              }
+            />
             {result.regime ? (
               <span className="text-xs text-zinc-400">
                 Regime:{" "}
                 <span className="font-medium text-zinc-200">{result.regime}</span>
               </span>
             ) : null}
+            {result.strategy ? (
+              <span className="text-xs text-zinc-400">
+                Policy:{" "}
+                <span className="font-mono font-medium text-zinc-200">{result.strategy}</span>
+              </span>
+            ) : null}
             {result.trade_id ? (
-              <span className="font-mono text-xs text-zinc-500">
+              <span className="font-mono text-xs text-zinc-400">
                 #{result.trade_id.slice(0, 8)}
               </span>
             ) : null}
           </div>
 
           {result.reason || result.details ? (
-            <p className="rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-300">
+            <p className="break-words rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-300">
               {result.reason ?? result.details}
             </p>
           ) : null}
@@ -406,7 +475,7 @@ export default function TradeEvaluatorForm() {
           {signal ? (
             <div>
               <div className="flex flex-wrap items-center gap-4">
-                <p className="text-xs font-semibold text-zinc-500">
+                <p className="text-xs font-semibold text-zinc-400">
                   Agent verdict
                 </p>
                 <span
@@ -423,7 +492,7 @@ export default function TradeEvaluatorForm() {
                   </span>
                 </span>
               </div>
-              <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-zinc-300">
+              <p className="mt-2 whitespace-pre-line break-words text-sm leading-relaxed text-zinc-300">
                 {signal.plain_language_reasoning}
               </p>
               {signal.bull_catalysts?.length ? (
@@ -455,15 +524,15 @@ export default function TradeEvaluatorForm() {
 
           {risk ? (
             <div>
-              <p className="mb-2 text-xs font-semibold text-zinc-500">
+              <p className="mb-2 text-xs font-semibold text-zinc-400">
                 Risk metrics
               </p>
-              <div className="grid grid-cols-2 gap-3 border-l-2 border-amber-700 pl-4 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 border-l-2 border-blue-500/70 pl-4 sm:grid-cols-4">
                 <Stat label="Shares" value={formatNumber(risk.shares)} />
                 <Stat
                   label="Allocated"
                   value={formatCurrency(risk.allocated_capital)}
-                  accent="text-amber-400"
+                  accent="text-blue-300"
                 />
                 <Stat
                   label="Stop Loss"
@@ -471,8 +540,17 @@ export default function TradeEvaluatorForm() {
                   accent="text-red-300"
                 />
                 <Stat
+                  label="Take Profit"
+                  value={formatCurrency(risk.take_profit_price)}
+                  accent="text-emerald-300"
+                />
+                <Stat
                   label="Risk"
                   value={formatPercent(risk.risk_percentage)}
+                />
+                <Stat
+                  label="Risk Budget"
+                  value={formatCurrency(risk.risk_budget)}
                 />
               </div>
             </div>
@@ -480,7 +558,7 @@ export default function TradeEvaluatorForm() {
 
           {report ? (
             <div>
-              <p className="mb-2 text-xs font-semibold text-zinc-500">
+              <p className="mb-2 text-xs font-semibold text-zinc-400">
                 VectorBT validation
               </p>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -501,6 +579,12 @@ export default function TradeEvaluatorForm() {
                   value={formatPercent(report.strategy_max_drawdown_pct)}
                 />
               </div>
+              <p className="mt-2 text-xs text-zinc-400">
+                {report.evaluation_method ?? "Validation method unavailable"}
+                {report.fee_bps !== undefined && report.slippage_bps !== undefined
+                  ? ` · ${report.fee_bps} bps fees · ${report.slippage_bps} bps slippage`
+                  : ""}
+              </p>
               <div className="mt-4">
                 <BacktestChart report={report} />
               </div>
@@ -509,21 +593,31 @@ export default function TradeEvaluatorForm() {
 
           {execution ? (
             <div>
-              <p className="mb-2 text-xs font-semibold text-zinc-500">
+              <p className="mb-2 text-xs font-semibold text-zinc-400">
                 Broker execution
               </p>
               <div className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
                 <span
-                  className={`h-2 w-2 rounded-full ${
+                  className={`h-2 w-2 shrink-0 rounded-full ${
                     execution.success ? "bg-emerald-400" : "bg-red-400"
                   }`}
                 />
                 <span className="font-mono text-sm text-zinc-200">
                   {execution.status ?? (execution.success ? "FILLED" : "FAILED")}
                 </span>
+                {execution.mode ? (
+                  <span className="rounded-full border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300">
+                    {execution.mode === "SIMULATED" ? "Simulation only" : "Alpaca paper"}
+                  </span>
+                ) : null}
                 {execution.order_id ? (
-                  <span className="font-mono text-xs text-zinc-500">
+                  <span className="break-all font-mono text-xs text-zinc-400">
                     order {execution.order_id}
+                  </span>
+                ) : null}
+                {execution.protective_stop_attached ? (
+                  <span className="text-xs text-emerald-300">
+                    Protective stop {formatCurrency(execution.protective_stop_price)}
                   </span>
                 ) : null}
                 {execution.status === "DRY_RUN" ? (
@@ -532,7 +626,9 @@ export default function TradeEvaluatorForm() {
                   </span>
                 ) : null}
                 {execution.error ? (
-                  <span className="text-xs text-red-300">{execution.error}</span>
+                  <span className="break-words text-xs text-red-300">
+                    {execution.error}
+                  </span>
                 ) : null}
               </div>
             </div>

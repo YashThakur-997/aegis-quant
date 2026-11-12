@@ -7,7 +7,7 @@ import {
   Save,
   SlidersHorizontal,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -37,16 +37,27 @@ const inputClass =
 
 const labelClass = "mb-1 block text-xs font-medium text-zinc-400";
 
-function parseSymbols(text: string): string[] {
+const SYMBOL_PATTERN = /^[A-Z0-9.-]{1,10}$/;
+
+function parseSymbols(text: string): {
+  symbols: string[];
+  invalid: string[];
+} {
   const seen = new Set<string>();
   const symbols: string[] = [];
+  const invalid: string[] = [];
   for (const part of text.split(/[\s,;]+/)) {
     const symbol = part.trim().toUpperCase();
-    if (!symbol || symbol.length > 10 || seen.has(symbol)) continue;
+    if (!symbol) continue;
+    if (!SYMBOL_PATTERN.test(symbol)) {
+      invalid.push(symbol);
+      continue;
+    }
+    if (seen.has(symbol)) continue;
     seen.add(symbol);
     symbols.push(symbol);
   }
-  return symbols;
+  return { symbols, invalid };
 }
 
 function toForm(config: ScanConfig): FormState {
@@ -104,11 +115,13 @@ export default function ScannerSettings({ onSaved }: { onSaved?: () => void }) {
   }, [load]);
 
   function patch(update: Partial<FormState>) {
+    if (error) setError("");
     setForm((current) => (current ? { ...current, ...update } : current));
   }
 
-  async function save() {
-    if (!form) return;
+  async function save(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    if (!form || busy !== null) return;
     setError("");
 
     const batch = numberField(form.batch, 1, 100);
@@ -132,16 +145,24 @@ export default function ScannerSettings({ onSaved }: { onSaved?: () => void }) {
     };
 
     if (form.mode === "static") {
-      const symbols = parseSymbols(form.universeText);
-      if (symbols.length === 0) {
+      const parsed = parseSymbols(form.universeText);
+      if (parsed.invalid.length > 0) {
+        setError(
+          `Invalid ticker symbol${parsed.invalid.length === 1 ? "" : "s"}: ${parsed.invalid
+            .slice(0, 3)
+            .join(", ")}.`
+        );
+        return;
+      }
+      if (parsed.symbols.length === 0) {
         setError("Enter at least one ticker for the static universe.");
         return;
       }
-      if (symbols.length > 100) {
+      if (parsed.symbols.length > 100) {
         setError("The static universe cannot exceed 100 symbols.");
         return;
       }
-      payload.universe = symbols;
+      payload.universe = parsed.symbols;
     } else {
       const size = numberField(form.size, 1, 100);
       const minPrice = numberField(form.minPrice, 0, 10000);
@@ -178,6 +199,7 @@ export default function ScannerSettings({ onSaved }: { onSaved?: () => void }) {
   }
 
   async function reset() {
+    if (busy !== null) return;
     if (!window.confirm("Clear dashboard overrides and use environment defaults?")) {
       return;
     }
@@ -202,6 +224,7 @@ export default function ScannerSettings({ onSaved }: { onSaved?: () => void }) {
   }
 
   async function refreshUniverse() {
+    if (busy !== null) return;
     setBusy("refresh");
     setError("");
     try {
@@ -223,13 +246,18 @@ export default function ScannerSettings({ onSaved }: { onSaved?: () => void }) {
     }
   }
 
-  const symbols = form ? parseSymbols(form.universeText) : [];
+  const parsedUniverse = form
+    ? parseSymbols(form.universeText)
+    : { symbols: [], invalid: [] };
+  const symbols = parsedUniverse.symbols;
   const resolved = config?.resolved_universe ?? [];
 
   return (
     <div className="mt-5 border-t border-zinc-800 pt-4">
       <button
         type="button"
+        aria-expanded={open}
+        aria-controls="scanner-settings-panel"
         onClick={() => setOpen((current) => !current)}
         className="flex w-full items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-100"
       >
@@ -245,26 +273,41 @@ export default function ScannerSettings({ onSaved }: { onSaved?: () => void }) {
         </span>
         <ChevronDown
           size={14}
-          className={`text-zinc-500 transition-transform ${
+          className={`text-zinc-400 transition-transform ${
             open ? "rotate-180" : ""
           }`}
         />
       </button>
 
       {open ? (
-        <div className="mt-3 space-y-4 rounded-xl border border-zinc-800 bg-zinc-950/40 p-3 sm:p-4">
+        <div
+          id="scanner-settings-panel"
+          className="mt-3 space-y-4 rounded-xl border border-zinc-800 bg-zinc-950/40 p-3 sm:p-4"
+        >
           {loading && !form ? (
-            <p className="text-xs text-zinc-500">Loading settings…</p>
+            <p className="text-xs text-zinc-400">Loading settings…</p>
           ) : null}
 
           {error ? (
-            <p className="rounded-lg border border-red-800/70 bg-red-950/50 px-3 py-2 text-xs text-red-300">
-              {error}
-            </p>
+            <div
+              role="alert"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-800/70 bg-red-950/50 px-3 py-2 text-xs text-red-300"
+            >
+              <span className="break-words">{error}</span>
+              {!form && !loading ? (
+                <button
+                  type="button"
+                  onClick={() => void load()}
+                  className="rounded border border-red-700/80 px-2 py-1 text-[11px] font-medium text-red-200 transition-colors hover:bg-red-900/40"
+                >
+                  Retry
+                </button>
+              ) : null}
+            </div>
           ) : null}
 
           {form ? (
-            <>
+            <form onSubmit={(e) => void save(e)} noValidate className="space-y-4">
               <div>
                 <span className={labelClass}>Universe mode</span>
                 <div className="grid grid-cols-2 gap-1 rounded-lg border border-zinc-800 bg-zinc-950/60 p-1">
@@ -277,11 +320,12 @@ export default function ScannerSettings({ onSaved }: { onSaved?: () => void }) {
                     <button
                       key={mode}
                       type="button"
+                      aria-pressed={form.mode === mode}
                       onClick={() => patch({ mode })}
                       className={`rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
                         form.mode === mode
                           ? "bg-zinc-700 text-zinc-100"
-                          : "text-zinc-500 hover:text-zinc-300"
+                          : "text-zinc-400 hover:text-zinc-200"
                       }`}
                     >
                       {label}
@@ -305,13 +349,13 @@ export default function ScannerSettings({ onSaved }: { onSaved?: () => void }) {
                     placeholder="AAPL, MSFT, NVDA"
                     className={`${inputClass} resize-y uppercase`}
                   />
-                  <p className="mt-1 text-[11px] text-zinc-500">
+                  <p className="mt-1 text-[11px] text-zinc-400">
                     {symbols.length} symbol{symbols.length === 1 ? "" : "s"} ·
                     comma or newline separated
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2">
                   <div>
                     <label htmlFor="scanner-size" className={labelClass}>
                       Top N symbols
@@ -346,7 +390,7 @@ export default function ScannerSettings({ onSaved }: { onSaved?: () => void }) {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2">
                 <div>
                   <label htmlFor="scanner-batch" className={labelClass}>
                     Batch size
@@ -383,7 +427,7 @@ export default function ScannerSettings({ onSaved }: { onSaved?: () => void }) {
                     type="checkbox"
                     checked={form.dryRun}
                     onChange={(event) => patch({ dryRun: event.target.checked })}
-                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 accent-amber-500"
+                    className="h-4 w-4 shrink-0 rounded border-zinc-700 bg-zinc-950 accent-amber-500"
                   />
                   Dry run — decide without submitting orders
                 </label>
@@ -394,7 +438,7 @@ export default function ScannerSettings({ onSaved }: { onSaved?: () => void }) {
                     onChange={(event) =>
                       patch({ skipHeld: event.target.checked })
                     }
-                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 accent-amber-500"
+                    className="h-4 w-4 shrink-0 rounded border-zinc-700 bg-zinc-950 accent-amber-500"
                   />
                   Skip tickers with an open position
                 </label>
@@ -405,7 +449,7 @@ export default function ScannerSettings({ onSaved }: { onSaved?: () => void }) {
                     onChange={(event) =>
                       patch({ marketHours: event.target.checked })
                     }
-                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 accent-amber-500"
+                    className="h-4 w-4 shrink-0 rounded border-zinc-700 bg-zinc-950 accent-amber-500"
                   />
                   Only sweep while the market is open
                 </label>
@@ -413,8 +457,7 @@ export default function ScannerSettings({ onSaved }: { onSaved?: () => void }) {
 
               <div className="flex flex-wrap gap-2">
                 <button
-                  type="button"
-                  onClick={() => void save()}
+                  type="submit"
                   disabled={busy !== null}
                   className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-100 px-3 py-2 text-xs font-semibold text-zinc-950 transition-colors hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-60"
                 >
@@ -428,7 +471,10 @@ export default function ScannerSettings({ onSaved }: { onSaved?: () => void }) {
                     disabled={busy !== null}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-950/60 px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:border-amber-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    <RefreshCw size={13} />
+                    <RefreshCw
+                      size={13}
+                      className={busy === "refresh" ? "animate-spin" : ""}
+                    />
                     {busy === "refresh" ? "Refreshing…" : "Refresh universe"}
                   </button>
                 ) : null}
@@ -444,25 +490,25 @@ export default function ScannerSettings({ onSaved }: { onSaved?: () => void }) {
               </div>
 
               <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2">
-                <p className="text-[11px] text-zinc-500">
+                <p className="text-[11px] text-zinc-400">
                   Resolved universe ·{" "}
-                  <span className="font-mono text-zinc-300">
+                  <span className="font-mono text-zinc-200">
                     {resolved.length} symbols
                   </span>{" "}
                   · {config?.universe_source ?? "—"}
                 </p>
-                <p className="mt-1 font-mono text-[11px] leading-relaxed text-zinc-400">
+                <p className="mt-1 break-words font-mono text-[11px] leading-relaxed text-zinc-400">
                   {resolved.slice(0, 14).join(", ")}
                   {resolved.length > 14
                     ? ` +${resolved.length - 14} more`
                     : ""}
                 </p>
-                <p className="mt-2 text-[11px] text-zinc-600">
+                <p className="mt-2 text-[11px] text-zinc-400">
                   Universe and batch changes apply on the next sweep. Interval
                   changes reach the worker within 60 seconds.
                 </p>
               </div>
-            </>
+            </form>
           ) : null}
         </div>
       ) : null}

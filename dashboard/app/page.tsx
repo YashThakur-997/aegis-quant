@@ -1,3 +1,6 @@
+import { BarChart3, BookOpen, LayoutDashboard, Radar, ShieldAlert } from "lucide-react";
+
+import CopyrightYear from "@/components/CopyrightYear";
 import JournalAnalytics from "@/components/JournalAnalytics";
 import JournalTable from "@/components/JournalTable";
 import KillSwitchPanel from "@/components/KillSwitchPanel";
@@ -6,58 +9,82 @@ import SystemStatus from "@/components/SystemStatus";
 import TradeEvaluatorForm from "@/components/TradeEvaluatorForm";
 import { API_BASE } from "@/lib/api";
 
+const navigation = [
+  { href: "#overview", label: "Overview", icon: LayoutDashboard },
+  { href: "#evaluate", label: "Evaluate", icon: BarChart3 },
+  { href: "#scanner", label: "Scanner", icon: Radar },
+  { href: "#journal", label: "Journal", icon: BookOpen },
+  { href: "#risk", label: "Risk controls", icon: ShieldAlert },
+];
+
+function Brand() {
+  return (
+    <a href="#overview" className="flex items-center gap-3 rounded-lg">
+      <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-blue-400/30 bg-blue-400/10 font-mono text-base font-medium text-blue-300">Æ</span>
+      <span>
+        <strong className="block text-sm font-medium tracking-[0.08em] text-zinc-100">AEGIS QUANT</strong>
+        <span className="block text-xs text-zinc-500">Trading desk</span>
+      </span>
+    </a>
+  );
+}
+
+function Navigation({ mobile = false }: { mobile?: boolean }) {
+  return (
+    <nav aria-label="Workspace" className={mobile ? "flex min-w-max gap-1" : "space-y-1"}>
+      {navigation.map(({ href, label, icon: Icon }) => (
+        <a key={href} href={href} className={`group flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-zinc-400 transition-colors hover:bg-white/[0.05] hover:text-zinc-100 focus-visible:outline-none ${mobile ? "whitespace-nowrap" : "w-full"}`}>
+          <Icon size={17} strokeWidth={1.6} className="text-zinc-500 transition-colors group-hover:text-blue-300" />
+          {label}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
 export default function Home() {
   return (
-    <main className="relative mx-auto max-w-screen-2xl px-4 py-6 sm:px-8 sm:py-8 lg:px-10">
-      <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
-        <div className="absolute -top-40 left-1/4 h-80 w-80 rounded-full bg-amber-500/10 blur-3xl" />
-        <div className="absolute right-0 top-1/3 h-96 w-96 rounded-full bg-emerald-500/10 blur-3xl" />
-      </div>
-
-      <header className="mb-8 flex flex-wrap items-center justify-between gap-4 border-b border-zinc-800 pb-6">
-        <div>
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900">
-              <span className="font-mono text-lg font-medium text-amber-500">
-                Æ
-              </span>
-            </div>
-            <div>
-              <h1 className="text-xl font-medium text-zinc-100 sm:text-2xl">
-                AEGIS-QUANT
-              </h1>
-              <p className="mt-1 text-sm text-zinc-400">
-                Autonomous trading desk
-              </p>
-            </div>
-          </div>
-        </div>
-
+    <div className="mx-auto min-h-screen max-w-[1600px] px-4 py-4 sm:px-6 lg:px-8">
+      <header className="flex items-center justify-between gap-4 border-b border-white/[0.08] pb-4 lg:hidden">
+        <Brand />
         <SystemStatus />
       </header>
+      <div className="-mx-4 overflow-x-auto border-b border-white/[0.08] px-4 py-2 sm:-mx-6 sm:px-6 lg:hidden"><Navigation mobile /></div>
 
-      <JournalAnalytics />
+      <div className="lg:grid lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-10">
+        <aside className="hidden lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col lg:border-r lg:border-white/[0.08] lg:py-7 lg:pr-6">
+          <Brand />
+          <div className="mt-12"><p className="mb-2 px-3 text-xs text-zinc-600">Workspace</p><Navigation /></div>
+          <p className="mt-auto border-t border-white/[0.08] px-3 pt-5 text-xs leading-relaxed text-zinc-500">Paper execution and deterministic guardrails</p>
+        </aside>
 
-      <div className="mt-4 grid grid-cols-1 gap-4 sm:mt-6 sm:gap-6 lg:grid-cols-12">
-        <div className="lg:col-span-8">
-          <TradeEvaluatorForm />
-        </div>
-        <div className="lg:col-span-4">
-          <div className="flex flex-col gap-4 sm:gap-6">
-            <ScannerStatus />
-            <KillSwitchPanel />
+        <main id="main-content" tabIndex={-1} className="min-w-0 py-7 outline-none lg:py-8">
+          <section className="mb-8 flex flex-wrap items-end justify-between gap-4 border-b border-white/[0.08] pb-6">
+            <div>
+              <p className="text-sm text-zinc-500">Trading workspace</p>
+              <h1 className="mt-1 text-2xl font-medium tracking-tight text-zinc-100 sm:text-3xl">Today&apos;s decisions</h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">Review activity, evaluate a symbol, and keep your automated scanner under control.</p>
+            </div>
+            <SystemStatus />
+          </section>
+
+          <section id="overview" aria-labelledby="overview-title" className="scroll-mt-6">
+            <div className="mb-4 flex items-center justify-between gap-3"><div><p className="desk-label">Overview</p><h2 id="overview-title" className="mt-1 text-lg font-medium text-zinc-100">Decision activity</h2></div><span className="hidden font-mono text-xs text-zinc-500 sm:block">LIVE JOURNAL</span></div>
+            <JournalAnalytics />
+          </section>
+
+          <div className="mt-8 grid gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.85fr)]">
+            <section id="evaluate" aria-labelledby="evaluate-title" className="scroll-mt-6"><div className="mb-4"><p className="desk-label">Trade review</p><h2 id="evaluate-title" className="mt-1 text-lg font-medium text-zinc-100">Evaluate an opportunity</h2></div><TradeEvaluatorForm /></section>
+            <div className="space-y-6">
+              <section id="scanner" aria-labelledby="scanner-title" className="scroll-mt-6"><div className="mb-4"><p className="desk-label">Market watch</p><h2 id="scanner-title" className="mt-1 text-lg font-medium text-zinc-100">Scanner</h2></div><ScannerStatus /></section>
+              <section id="risk" aria-labelledby="risk-title" className="scroll-mt-6"><div className="mb-4"><p className="desk-label">Safety</p><h2 id="risk-title" className="mt-1 text-lg font-medium text-zinc-100">Risk controls</h2></div><KillSwitchPanel /></section>
+            </div>
           </div>
-        </div>
-      </div>
 
-      <div className="mt-4 sm:mt-6">
-        <JournalTable />
+          <section id="journal" aria-labelledby="journal-title" className="mt-8 scroll-mt-6"><div className="mb-4"><p className="desk-label">Audit trail</p><h2 id="journal-title" className="mt-1 text-lg font-medium text-zinc-100">Decision journal</h2></div><JournalTable /></section>
+          <footer className="mt-8 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.08] pt-4 text-xs text-zinc-500"><span>© <CopyrightYear /> AEGIS QUANT · paper trading only</span><span className="break-all font-mono">API {API_BASE}</span></footer>
+        </main>
       </div>
-
-      <footer className="mt-8 flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 pt-4 text-xs text-zinc-500">
-        <span>AEGIS-QUANT · deterministic guardrails · sandbox execution</span>
-        <span className="break-all font-mono">API {API_BASE}</span>
-      </footer>
-    </main>
+    </div>
   );
 }

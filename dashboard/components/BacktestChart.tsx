@@ -34,16 +34,16 @@ export default function BacktestChart({ report }: { report: VectorbtReport }) {
 
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
-      <div className="mb-1 flex items-center justify-between">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-400">
           Backtest · Strategy vs Benchmark
         </p>
-        <span className="font-mono text-[10px] text-zinc-600">
+        <span className="font-mono text-[10px] text-zinc-400">
           total return %
         </span>
       </div>
       <div className="h-56 w-full">
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0}>
           <BarChart
             data={data}
             margin={{ top: 12, right: 8, left: -18, bottom: 0 }}

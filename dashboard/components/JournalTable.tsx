@@ -1,6 +1,6 @@
 "use client";
 
-import { Download } from "lucide-react";
+import { Download, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -54,14 +54,16 @@ export default function JournalTable() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [filter, setFilter] = useState<"all" | "actionable">("all");
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const visible =
     filter === "all" ? entries : entries.filter((e) => e.status !== "HOLD");
 
-  const load = useCallback(async (showSpinner: boolean) => {
-    if (showSpinner) setLoading(true);
+  const load = useCallback(async (mode: "initial" | "manual" | "poll") => {
+    if (mode === "initial") setLoading(true);
+    if (mode === "manual") setRefreshing(true);
     try {
       const data = await fetchJournals(200);
       setEntries(Array.isArray(data) ? data : []);
@@ -75,15 +77,23 @@ export default function JournalTable() {
       );
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
-    void load(true);
+    void load("initial");
     const interval = window.setInterval(() => {
-      void load(false);
+      void load("poll");
     }, REFRESH_MS);
-    return () => window.clearInterval(interval);
+    const onUpdated = () => {
+      void load("poll");
+    };
+    window.addEventListener("aegis:journal-updated", onUpdated);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("aegis:journal-updated", onUpdated);
+    };
   }, [load]);
 
   function exportCsv() {
@@ -115,18 +125,19 @@ export default function JournalTable() {
               <button
                 key={mode}
                 type="button"
+                aria-pressed={filter === mode}
                 onClick={() => setFilter(mode)}
                 className={`rounded-md px-2.5 py-1 transition-colors ${
                   filter === mode
                     ? "bg-zinc-700 text-zinc-100"
-                    : "text-zinc-500 hover:text-zinc-300"
+                    : "text-zinc-400 hover:text-zinc-200"
                 }`}
               >
                 {mode === "all" ? "All" : "Actionable"}
               </button>
             ))}
           </div>
-          <span className="hidden items-center gap-2 text-xs text-zinc-500 sm:flex">
+          <span className="hidden items-center gap-2 text-xs text-zinc-400 sm:flex">
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
             Updates every {REFRESH_MS / 1000} sec
           </span>
@@ -134,6 +145,7 @@ export default function JournalTable() {
             type="button"
             onClick={exportCsv}
             disabled={visible.length === 0}
+            aria-label="Export journal to CSV"
             className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-950/60 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-amber-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Download size={13} />
@@ -141,24 +153,33 @@ export default function JournalTable() {
           </button>
           <button
             type="button"
-            onClick={() => void load(true)}
-            className="rounded-lg border border-zinc-700 bg-zinc-950/60 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-amber-700 hover:text-zinc-100"
+            disabled={refreshing}
+            onClick={() => void load("manual")}
+            aria-label="Refresh journal data"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-950/60 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-amber-700 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            Refresh
+            <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
+            {refreshing ? "Refreshing…" : "Refresh"}
           </button>
         </div>
       </div>
 
       {error ? (
-        <div className="mx-4 mt-4 rounded-lg border border-red-800/70 bg-red-950/50 px-3 py-2 text-xs text-red-300 sm:mx-6">
+        <div
+          role="alert"
+          className="mx-4 mt-4 break-words rounded-lg border border-red-800/70 bg-red-950/50 px-3 py-2 text-xs text-red-300 sm:mx-6"
+        >
           {error}
         </div>
       ) : null}
 
       <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[900px] border-collapse text-left text-sm">
+        <table
+          aria-label="Immutable trade journal"
+          className="w-full min-w-[900px] border-collapse text-left text-sm"
+        >
           <thead className="bg-zinc-950/60">
-            <tr className="text-xs text-zinc-500">
+            <tr className="text-xs text-zinc-400">
               <th className="px-6 py-3 font-medium">Time</th>
               <th className="px-3 py-3 font-medium">Ticker</th>
               <th className="px-3 py-3 font-medium">Action</th>
@@ -167,6 +188,8 @@ export default function JournalTable() {
               <th className="px-3 py-3 text-right font-medium">Capital</th>
               <th className="px-3 py-3 text-right font-medium">Stop</th>
               <th className="px-3 py-3 font-medium">Regime</th>
+              <th className="px-3 py-3 font-medium">Strategy</th>
+              <th className="px-3 py-3 font-medium">Broker</th>
               <th className="px-3 py-3 text-right font-medium">Score</th>
               <th className="px-6 py-3 font-medium">Trade diary</th>
             </tr>
@@ -175,7 +198,7 @@ export default function JournalTable() {
             {loading && visible.length === 0 ? (
               <tr>
                 <td
-                  colSpan={10}
+                  colSpan={12}
                   className="px-6 py-10 text-center text-xs text-zinc-500"
                 >
                   Loading audit log…
@@ -184,7 +207,7 @@ export default function JournalTable() {
             ) : visible.length === 0 ? (
               <tr>
                 <td
-                  colSpan={10}
+                  colSpan={12}
                   className="px-6 py-10 text-center text-xs text-zinc-500"
                 >
                   {entries.length === 0
@@ -222,13 +245,19 @@ export default function JournalTable() {
                   <td className="whitespace-nowrap px-3 py-3 font-mono text-xs text-zinc-400">
                     {entry.regime ?? "—"}
                   </td>
+                  <td className="whitespace-nowrap px-3 py-3 font-mono text-xs text-zinc-400">
+                    {entry.strategy ?? "—"}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-3 font-mono text-xs text-zinc-400">
+                    {entry.broker_mode ?? "—"}
+                  </td>
                   <td className="px-3 py-3 text-right font-mono tabular-nums text-xs text-zinc-300">
                     {formatConviction(entry.conviction)}
                   </td>
                   <td className="max-w-md px-6 py-3">
                     <p
                       title={entry.plain_language_reasoning ?? ""}
-                      className="line-clamp-3 text-xs leading-relaxed text-zinc-400"
+                      className="line-clamp-3 break-words text-xs leading-relaxed text-zinc-400"
                     >
                       {entry.plain_language_reasoning ?? "—"}
                     </p>
@@ -271,38 +300,50 @@ export default function JournalTable() {
 
               <dl className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
                 <div>
-                  <dt className="text-zinc-500">Shares</dt>
-                  <dd className="font-mono text-zinc-300">
+                  <dt className="text-zinc-400">Shares</dt>
+                  <dd className="font-mono text-zinc-200">
                     {formatNumber(entry.shares)}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-zinc-500">Capital</dt>
-                  <dd className="font-mono text-zinc-300">
+                  <dt className="text-zinc-400">Capital</dt>
+                  <dd className="font-mono text-zinc-200">
                     {formatCurrency(entry.allocated_capital)}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-zinc-500">Stop</dt>
-                  <dd className="font-mono text-zinc-300">
+                  <dt className="text-zinc-400">Stop</dt>
+                  <dd className="font-mono text-zinc-200">
                     {formatCurrency(entry.stop_loss_price)}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-zinc-500">Score</dt>
-                  <dd className="font-mono text-zinc-300">
+                  <dt className="text-zinc-400">Score</dt>
+                  <dd className="font-mono text-zinc-200">
                     {formatConviction(entry.conviction)}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-zinc-500">Regime</dt>
-                  <dd className="font-mono text-zinc-300">
+                  <dt className="text-zinc-400">Regime</dt>
+                  <dd className="font-mono text-zinc-200">
                     {entry.regime ?? "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-zinc-400">Strategy</dt>
+                  <dd className="font-mono text-zinc-200">
+                    {entry.strategy ?? "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-zinc-400">Broker</dt>
+                  <dd className="font-mono text-zinc-200">
+                    {entry.broker_mode ?? "—"}
                   </dd>
                 </div>
               </dl>
 
-              <p className="mt-3 text-xs leading-relaxed text-zinc-400">
+              <p className="mt-3 break-words text-xs leading-relaxed text-zinc-400">
                 {entry.plain_language_reasoning ?? "—"}
               </p>
             </article>
@@ -310,7 +351,7 @@ export default function JournalTable() {
         )}
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 px-4 py-3 text-xs text-zinc-500 sm:px-6">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 px-4 py-3 text-xs text-zinc-400 sm:px-6">
         <span className="font-mono tabular-nums">
           {visible.length} of {entries.length}{" "}
           {entries.length === 1 ? "entry" : "entries"}
