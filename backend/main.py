@@ -8,12 +8,14 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from backend.core.market_data import AlpacaMarketData, AlpacaMarketDataError
 from backend.core.pipeline import (
     KillSwitchActive,
     MarketInputPayload,
+    broker,
     risk_engine,
     run_pipeline,
 )
@@ -114,12 +116,33 @@ def _init_db(retries: int = 10, delay: float = 2.0) -> None:
     for attempt in range(1, retries + 1):
         try:
             Base.metadata.create_all(bind=engine)
+            _migrate_journal_columns()
             logger.info("Database schema ready.")
             return
         except Exception as exc:
             logger.warning("Database not ready (%s/%s): %s", attempt, retries, exc)
             time.sleep(delay)
     logger.error("Could not initialize database schema after %s attempts.", retries)
+
+
+def _migrate_journal_columns() -> None:
+    """Add audit columns for existing demo volumes without destructive migrations."""
+    expected = {
+        "strategy": "VARCHAR",
+        "risk_budget": "FLOAT",
+        "broker_mode": "VARCHAR",
+        "broker_order_id": "VARCHAR",
+        "broker_stop_order_id": "VARCHAR",
+        "broker_status": "VARCHAR",
+        "broker_response": "TEXT",
+    }
+    existing = {column["name"] for column in inspect(engine).get_columns("trade_journals")}
+    missing = {name: ddl for name, ddl in expected.items() if name not in existing}
+    if not missing:
+        return
+    with engine.begin() as connection:
+        for name, ddl in missing.items():
+            connection.execute(text(f"ALTER TABLE trade_journals ADD COLUMN {name} {ddl}"))
 
 
 @app.on_event("startup")
@@ -180,6 +203,7 @@ def analyze_ticker(
         news_summary=news["summary"],
         current_equity=snapshot["equity"],
         current_daily_pnl=snapshot["daily_pnl_pct"],
+        buying_power=snapshot["buying_power"],
     )
 
     result = run_pipeline(payload, db, dry_run=dry_run)
@@ -191,6 +215,7 @@ def analyze_ticker(
         "news_count": news["count"],
         "equity": round(snapshot["equity"], 2),
         "daily_pnl_pct": round(snapshot["daily_pnl_pct"] * 100, 4),
+        "buying_power": round(snapshot["buying_power"], 2),
         "dry_run": dry_run,
     }
     return result
@@ -370,6 +395,12 @@ def list_trades(limit: int = 50, db: Session = Depends(get_db)):
             "regime": r.regime,
             "conviction": r.conviction,
             "status": r.status,
+            "strategy": r.strategy,
+            "risk_budget": r.risk_budget,
+            "broker_mode": r.broker_mode,
+            "broker_order_id": r.broker_order_id,
+            "broker_stop_order_id": r.broker_stop_order_id,
+            "broker_status": r.broker_status,
             "plain_language_reasoning": r.plain_language_reasoning,
             "bull_catalysts": json.loads(r.bull_catalysts) if r.bull_catalysts else [],
             "bear_risks": json.loads(r.bear_risks) if r.bear_risks else [],
@@ -391,4 +422,9 @@ def kill_switch_status():
 @app.post("/api/v1/kill-switch/trigger")
 def manual_kill_switch(reason: str = "Manual override by human operator"):
     risk_engine.trigger_kill_switch(reason)
-    return {"status": "CRITICAL_LOCKOUT_ENGAGED", "reason": reason}
+    cancellations = broker.cancel_open_orders()
+    return {
+        "status": "CRITICAL_LOCKOUT_ENGAGED",
+        "reason": reason,
+        "cancellation_result": cancellations,
+    }

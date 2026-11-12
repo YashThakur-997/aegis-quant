@@ -12,8 +12,8 @@ r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 class DeterministicRiskEngine:
     """
     Swimlane 4: Deterministic Risk Guardrail Engine (No LLM Math)
-    Enforces strict mathematical guardrails, fractional Kelly position sizing,
-    2x ATR stop-losses, and the Redis atomic circuit breaker.
+    Enforces strict mathematical guardrails, fixed-fractional risk sizing,
+    ATR stop-losses, and the Redis circuit breaker.
     """
     def __init__(self, initial_equity: float, daily_loss_limit_pct: float = 0.025):
         self.initial_equity = initial_equity
@@ -26,76 +26,77 @@ class DeterministicRiskEngine:
 
     def trigger_kill_switch(self, reason: str) -> None:
         """
-        Engages the circuit breaker: sets Redis lock, cancels open orders, 
-        and halts all agent trading activity[cite: 3, 5, 6].
+        Atomically records the circuit-breaker state before callers cancel paper orders.
         """
-        r.set("AEGIS_KILL_SWITCH_ENGAGED", "TRUE")
-        r.set("AEGIS_KILL_REASON", reason)
+        pipeline = r.pipeline(transaction=True)
+        pipeline.set("AEGIS_KILL_SWITCH_ENGAGED", "TRUE")
+        pipeline.set("AEGIS_KILL_REASON", reason)
+        pipeline.execute()
         logger.critical(f"🚨 CIRCUIT BREAKER ENGAGED: {reason}")
-        # Insert downstream broker order cancellation trigger here
 
     def calculate_position_size(
         self,
         current_equity: float,
         current_daily_pnl: float,
-        win_rate: float,
-        reward_risk_ratio: float,
+        buying_power: float,
         atr: float,
         price: float,
-        direction: str = "BUY"
+        direction: str = "BUY",
+        risk_budget_pct: float = 0.02,
+        max_position_pct: float = 0.10,
     ) -> Dict[str, Any]:
-        """
-        Executes pure Python deterministic risk logic:
-        1. Validates the Redis kill-switch state[cite: 3, 5, 6].
-        2. Enforces the hard daily drawdown cap (-2.5%)[cite: 3, 5, 6].
-        3. Computes Fractional Kelly sizing: Size = Equity * min(0.02, 0.25 * (WinRate - (1 - WinRate) / RR))[cite: 5, 6].
-        4. Calculates 2x ATR dynamic stop-loss[cite: 5, 6].
-        """
+        """Size a trade from cash at risk, stop distance, and available buying power."""
         # 1. Check if System is Locked Out via Kill-Switch
         if self.is_kill_switch_active():
             return {
                 "approved": False, 
-                "reason": "Execution blocked: Redis atomic kill-switch or circuit breaker is active[cite: 3, 5, 6]."
+                "reason": "Execution blocked: Redis atomic kill-switch or circuit breaker is active."
             }
 
-        # 2. Hard Daily Loss Cap Check (<= -2.5%)[cite: 3, 5, 6]
+        # 2. Hard Daily Loss Cap Check (<= -2.5%)
         if current_daily_pnl <= -self.daily_loss_limit:
-            self.trigger_kill_switch(f"Daily drawdown limit exceeded: {current_daily_pnl * 100:.2f}%[cite: 3, 5, 6]")
+            self.trigger_kill_switch(f"Daily drawdown limit exceeded: {current_daily_pnl * 100:.2f}%")
             return {
                 "approved": False, 
-                "reason": "Daily drawdown threshold (-2.5%) breached. Circuit breaker tripped[cite: 3, 5, 6]."
+                "reason": "Daily drawdown threshold (-2.5%) breached. Circuit breaker tripped."
             }
 
-        # 3. Fractional Kelly Position Sizing Calculation[cite: 5, 6]
-        if reward_risk_ratio <= 0:
-            return {"approved": False, "reason": "Invalid reward-to-risk ratio provided."}
+        if current_equity <= 0 or buying_power <= 0 or price <= 0 or atr <= 0:
+            return {"approved": False, "reason": "Equity, buying power, price, and ATR must be positive."}
 
-        kelly_numerator_term = win_rate - ((1.0 - win_rate) / reward_risk_ratio)
-        fractional_kelly_factor = max(0.0, 0.25 * kelly_numerator_term) # Quarter Kelly for safety
-        
-        # Cap maximum risk allocation per trade at 2.0% of portfolio equity[cite: 5, 6]
-        max_allowed_risk_pct = min(0.02, fractional_kelly_factor)
-
-        if max_allowed_risk_pct <= 0:
-            return {"approved": False, "reason": "Kelly criterion indicates negative or zero edge; trade rejected."}
-
-        allocated_capital = current_equity * max_allowed_risk_pct
-        shares = int(allocated_capital // price)
-
-        if shares <= 0:
-            return {"approved": False, "reason": "Calculated share volume is zero based on available capital."}
-
-        # 4. 2x ATR Dynamic Stop-Loss Calculation[cite: 5, 6]
+        # 3. ATR stop and fixed-fractional sizing. The risk budget is loss at the stop,
+        # not the position's notional value.
         if direction.upper() == "BUY":
             stop_loss_price = price - (2.0 * atr)
+            take_profit_price = price + (4.0 * atr)
         else:
             stop_loss_price = price + (2.0 * atr)
+            take_profit_price = price - (4.0 * atr)
+        if stop_loss_price <= 0 or take_profit_price <= 0:
+            return {"approved": False, "reason": "Calculated protective exit is invalid."}
+
+        stop_distance = abs(price - stop_loss_price)
+        risk_budget = current_equity * risk_budget_pct
+        max_position_notional = min(buying_power, current_equity * max_position_pct)
+        shares_by_risk = int(risk_budget // stop_distance)
+        shares_by_notional = int(max_position_notional // price)
+        shares = min(shares_by_risk, shares_by_notional)
+
+        if shares <= 0:
+            return {"approved": False, "reason": "Risk budget or buying-power cap cannot fund one share."}
+
+        allocated_capital = shares * price
+        actual_risk = shares * stop_distance
 
         return {
             "approved": True,
             "shares": shares,
             "allocated_capital": round(allocated_capital, 2),
+            "risk_budget": round(risk_budget, 2),
+            "actual_risk": round(actual_risk, 2),
+            "buying_power": round(buying_power, 2),
             "stop_loss_price": round(stop_loss_price, 2),
-            "risk_percentage": round(max_allowed_risk_pct * 100, 2),
+            "take_profit_price": round(take_profit_price, 2),
+            "risk_percentage": round((actual_risk / current_equity) * 100, 2),
             "guardrail_status": "PASSED"
         }

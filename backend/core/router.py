@@ -91,57 +91,123 @@ class RegimeStrategyRouter:
         hidden_states = self.hmm_model.predict(features)
         latest_state = int(hidden_states[-1])
 
-        # Map hidden state IDs to human-readable trading regimes
-        # State mapping heuristic based on volatility and mean returns
-        regime_mapping = {
-            0: "Trending Bull/Bear",
-            1: "Mean-Reverting Chop",
-            2: "High-Vol Shock"
-        }
-        current_regime = regime_mapping.get(latest_state % self.n_regimes, "Mean-Reverting Chop")
-
-        return current_regime, hidden_states
+        # HMM state IDs have no stable semantic ordering. Use its fitted state as a
+        # diagnostic, while route names come from observable volatility/trend features.
+        logger.debug("Latest fitted HMM state: %s", latest_state)
+        return self._heuristic_regime(features), hidden_states
 
     @staticmethod
-    def validate_with_vectorbt(df: pd.DataFrame, fast_window: int = 10, slow_window: int = 30) -> Dict[str, Any]:
-        """
-        Uses VectorBT to perform a high-speed walk-forward backtest (<150ms) 
-        comparing a moving-average crossover strategy against a Buy-and-Hold benchmark[cite: 3, 7].
-        """
-        close_prices = df['close']
+    def strategy_for_regime(regime: str) -> str:
+        """Map each observed regime to a deterministic, explainable policy."""
+        return {
+            "Trending Bull/Bear": "TREND_MOMENTUM",
+            "Mean-Reverting Chop": "MEAN_REVERSION",
+            "High-Vol Shock": "CAPITAL_PRESERVATION",
+        }.get(regime, "CAPITAL_PRESERVATION")
 
-        # Generate Strategy Signals (Fast MA crosses Slow MA)
-        fast_ma = vbt.MA.run(close_prices, window=fast_window)
-        slow_ma = vbt.MA.run(close_prices, window=slow_window)
-        
-        entries = fast_ma.ma_crossed_above(slow_ma.ma)
-        exits = fast_ma.ma_crossed_below(slow_ma.ma)
+    @staticmethod
+    def calculate_atr(df: pd.DataFrame, window: int = 14) -> float:
+        """Compute ATR using only completed bars available at decision time."""
+        high = pd.to_numeric(df["high"], errors="coerce")
+        low = pd.to_numeric(df["low"], errors="coerce")
+        previous_close = pd.to_numeric(df["close"], errors="coerce").shift(1)
+        true_range = pd.concat(
+            [high - low, (high - previous_close).abs(), (low - previous_close).abs()], axis=1
+        ).max(axis=1)
+        atr = true_range.rolling(window=window, min_periods=window).mean().iloc[-1]
+        return float(atr) if pd.notna(atr) else 0.0
 
-        # Run Strategy Backtest Portfolio Simulation
-        portfolio = vbt.Portfolio.from_signals(close_prices, entries, exits, init_cash=10000.0)
-        
-        # Run Benchmark (Buy & Hold) Portfolio Simulation
-        benchmark_entries = pd.Series(False, index=close_prices.index)
+    @staticmethod
+    def _rsi(close: pd.Series, window: int = 14) -> pd.Series:
+        delta = close.diff()
+        gains = delta.clip(lower=0).rolling(window=window, min_periods=window).mean()
+        losses = (-delta.clip(upper=0)).rolling(window=window, min_periods=window).mean()
+        rs = gains / losses.replace(0, np.nan)
+        return 100 - (100 / (1 + rs))
+
+    @classmethod
+    def strategy_signals(cls, df: pd.DataFrame, strategy: str) -> Tuple[pd.Series, pd.Series]:
+        """Generate next-bar signals without reading future bars."""
+        close = pd.to_numeric(df["close"], errors="coerce")
+        entries = pd.Series(False, index=df.index)
+        exits = pd.Series(False, index=df.index)
+        if strategy == "TREND_MOMENTUM":
+            fast = close.rolling(10, min_periods=10).mean()
+            slow = close.rolling(30, min_periods=30).mean()
+            entries = (fast > slow) & (fast.shift(1) <= slow.shift(1))
+            exits = (fast < slow) & (fast.shift(1) >= slow.shift(1))
+        elif strategy == "MEAN_REVERSION":
+            rsi = cls._rsi(close)
+            entries = rsi < 30
+            exits = rsi > 55
+        # CAPITAL_PRESERVATION deliberately stays flat.
+        # Signals become executable on the following bar, avoiding same-close fills.
+        return entries.shift(1, fill_value=False), exits.shift(1, fill_value=False)
+
+    @classmethod
+    def deterministic_action(cls, df: pd.DataFrame, strategy: str) -> str:
+        entries, _ = cls.strategy_signals(df, strategy)
+        return "BUY" if bool(entries.iloc[-1]) else "HOLD"
+
+    @classmethod
+    def walk_forward_validate(
+        cls,
+        df: pd.DataFrame,
+        strategy: str,
+        fee_rate: float = 0.001,
+        slippage: float = 0.0005,
+    ) -> Dict[str, Any]:
+        """Run a next-bar, expanding-window out-of-sample validation against buy-and-hold."""
+        close_prices = pd.to_numeric(df["close"], errors="coerce").dropna()
+        if len(close_prices) < 61:
+            return {
+                "strategy": strategy,
+                "validation_status": "INSUFFICIENT_HISTORY",
+                "evaluation_method": "expanding-window, next-bar execution",
+                "minimum_bars": 61,
+            }
+
+        entries, exits = cls.strategy_signals(df.loc[close_prices.index], strategy)
+        # The first half is historical context; scoring starts only after it.
+        validation_start = max(30, len(close_prices) // 2)
+        entries.iloc[:validation_start] = False
+        exits.iloc[:validation_start] = False
+        tested_prices = close_prices.iloc[validation_start:]
+        tested_entries = entries.iloc[validation_start:]
+        tested_exits = exits.iloc[validation_start:]
+        portfolio = vbt.Portfolio.from_signals(
+            tested_prices, tested_entries, tested_exits, init_cash=10000.0,
+            fees=fee_rate, slippage=slippage,
+        )
+        benchmark_entries = pd.Series(False, index=tested_prices.index)
         benchmark_entries.iloc[0] = True
-        benchmark_portfolio = vbt.Portfolio.from_signals(close_prices, benchmark_entries, pd.Series(False, index=close_prices.index), init_cash=10000.0)
+        benchmark = vbt.Portfolio.from_signals(
+            tested_prices, benchmark_entries, pd.Series(False, index=tested_prices.index),
+            init_cash=10000.0, fees=fee_rate, slippage=slippage,
+        )
 
-        strategy_return = float(portfolio.total_return() * 100)
-        benchmark_return = float(benchmark_portfolio.total_return() * 100)
-        
-        strategy_sharpe = float(portfolio.sharpe_ratio())
-        benchmark_sharpe = float(benchmark_portfolio.sharpe_ratio())
-
-        max_drawdown = float(portfolio.max_drawdown() * 100)
-
-        def _finite(value: float, ndigits: int = 2) -> Any:
-            value = round(value, ndigits)
+        def finite(value: float) -> Any:
+            value = round(float(value), 2)
             return value if np.isfinite(value) else None
 
+        strategy_return = float(portfolio.total_return() * 100)
+        benchmark_return = float(benchmark.total_return() * 100)
         return {
-            "strategy_total_return_pct": _finite(strategy_return),
-            "benchmark_total_return_pct": _finite(benchmark_return),
-            "strategy_sharpe_ratio": _finite(strategy_sharpe),
-            "benchmark_sharpe_ratio": _finite(benchmark_sharpe),
-            "strategy_max_drawdown_pct": _finite(max_drawdown),
-            "validation_status": "PASSED" if strategy_return >= benchmark_return else "WARNING_UNDERPERFORMING"
+            "strategy": strategy,
+            "evaluation_method": "expanding-window, next-bar execution",
+            "validation_start_bar": validation_start,
+            "validation_bars": len(tested_prices),
+            "fee_bps": round(fee_rate * 10000, 1),
+            "slippage_bps": round(slippage * 10000, 1),
+            "strategy_total_return_pct": finite(strategy_return),
+            "benchmark_total_return_pct": finite(benchmark_return),
+            "strategy_sharpe_ratio": finite(portfolio.sharpe_ratio()),
+            "benchmark_sharpe_ratio": finite(benchmark.sharpe_ratio()),
+            "strategy_max_drawdown_pct": finite(portfolio.max_drawdown() * 100),
+            "validation_status": "PASSED" if strategy_return >= benchmark_return else "WARNING_UNDERPERFORMING",
         }
+
+    @classmethod
+    def validate_with_vectorbt(cls, df: pd.DataFrame, fast_window: int = 10, slow_window: int = 30) -> Dict[str, Any]:
+        """Compatibility wrapper for callers; validation is now next-bar walk-forward."""
+        return cls.walk_forward_validate(df, "TREND_MOMENTUM")

@@ -1,6 +1,7 @@
 import json
 import logging
 import uuid
+from typing import Optional
 
 import pandas as pd
 from pydantic import BaseModel
@@ -31,6 +32,7 @@ class MarketInputPayload(BaseModel):
     news_summary: str
     current_equity: float
     current_daily_pnl: float
+    buying_power: Optional[float] = None
 
 
 def _journal_trade(
@@ -43,6 +45,9 @@ def _journal_trade(
     shares: int = None,
     allocated_capital: float = None,
     stop_loss_price: float = None,
+    strategy: str = None,
+    risk_budget: float = None,
+    execution_result: dict = None,
 ) -> TradeJournalModel:
     """Persists a decision/trade outcome to the Postgres trade journal."""
     entry = TradeJournalModel(
@@ -58,6 +63,13 @@ def _journal_trade(
         bull_catalysts=json.dumps(signal.bull_catalysts or []),
         bear_risks=json.dumps(signal.bear_risks or []),
         status=status,
+        strategy=strategy,
+        risk_budget=risk_budget,
+        broker_mode=(execution_result or {}).get("mode"),
+        broker_order_id=(execution_result or {}).get("order_id"),
+        broker_stop_order_id=(execution_result or {}).get("stop_order_id"),
+        broker_status=(execution_result or {}).get("status"),
+        broker_response=json.dumps(execution_result) if execution_result else None,
     )
     db.add(entry)
     db.commit()
@@ -81,9 +93,11 @@ def run_pipeline(
     # 2. Swimlane 1: Temporal Firewall (Anonymize & Normalize)
     masked_df = TemporalFirewall.anonymize_market_data(df, ticker_alias="ASSET_X")
 
-    # 3. Swimlane 2: Regime Router & VectorBT Validation
+    # 3. Swimlane 2: Regime router, deterministic strategy, and next-bar validation.
     current_regime, _ = router.fit_predict_regime(df)
-    vbt_report = router.validate_with_vectorbt(df)
+    strategy = router.strategy_for_regime(current_regime)
+    vbt_report = router.walk_forward_validate(df, strategy)
+    deterministic_direction = router.deterministic_action(df, strategy)
 
     # 4. Swimlane 3: Adversarial LangGraph Debate
     debate_initial_state = {
@@ -96,37 +110,75 @@ def run_pipeline(
     debate_result = debate_workflow.invoke(debate_initial_state)
     signal = debate_result["final_signal"]
 
+    # The LLM may explain or veto a deterministic entry. It cannot create one.
+    if vbt_report.get("validation_status") != "PASSED":
+        signal = signal.model_copy(update={
+            "direction": "HOLD",
+            "plain_language_reasoning": (
+                f"{strategy} is blocked because walk-forward validation status is "
+                f"{vbt_report.get('validation_status')}. LLM review: {signal.plain_language_reasoning}"
+            ),
+        })
+    elif deterministic_direction != "BUY":
+        signal = signal.model_copy(update={
+            "direction": "HOLD",
+            "plain_language_reasoning": (
+                f"{strategy} selected HOLD from completed-bar rules. "
+                f"LLM review: {signal.plain_language_reasoning}"
+            ),
+        })
+    elif signal.direction != "BUY":
+        signal = signal.model_copy(update={
+            "direction": "HOLD",
+            "plain_language_reasoning": (
+                f"{strategy} proposed BUY, but the LLM risk review vetoed entry. "
+                f"{signal.plain_language_reasoning}"
+            ),
+        })
+
     if signal.direction == "HOLD":
         journal = _journal_trade(
-            db, payload=payload, signal=signal, regime=current_regime, status="HOLD"
+            db, payload=payload, signal=signal, regime=current_regime, status="HOLD", strategy=strategy
         )
         return {
             "status": "HOLD",
-            "reason": "LangGraph consensus resulted in HOLD.",
+            "reason": "Deterministic policy held or LLM risk review vetoed the trade.",
+            "regime": current_regime,
+            "strategy": strategy,
+            "vectorbt_validation": vbt_report,
+            "trade_signal": signal.dict(),
             "trade_id": journal.trade_id,
         }
 
-    # 5. Swimlane 4: Deterministic Risk Guardrails (Kelly Sizing & ATR Stop)
-    mock_atr = float(df["high"].iloc[-1] - df["low"].iloc[-1])
+    # 5. Swimlane 4: deterministic cash-risk sizing and ATR protective exits.
+    atr = router.calculate_atr(df)
     current_price = float(df["close"].iloc[-1])
 
     risk_assessment = risk_engine.calculate_position_size(
         current_equity=payload.current_equity,
         current_daily_pnl=payload.current_daily_pnl,
-        win_rate=0.55,
-        reward_risk_ratio=1.5,
-        atr=mock_atr,
+        buying_power=payload.buying_power or payload.current_equity,
+        atr=atr,
         price=current_price,
         direction=signal.direction,
     )
 
     if not risk_assessment["approved"]:
+        cancellations = None
+        if current_daily_pnl <= -risk_engine.daily_loss_limit:
+            cancellations = broker.cancel_open_orders()
         journal = _journal_trade(
-            db, payload=payload, signal=signal, regime=current_regime, status="REJECTED"
+            db, payload=payload, signal=signal, regime=current_regime, status="REJECTED",
+            strategy=strategy, execution_result=cancellations,
         )
         return {
             "status": "REJECTED_BY_RISK_ENGINE",
             "details": risk_assessment["reason"],
+            "regime": current_regime,
+            "strategy": strategy,
+            "vectorbt_validation": vbt_report,
+            "risk_allocation": risk_assessment,
+            "cancellation_result": cancellations,
             "trade_id": journal.trade_id,
         }
 
@@ -140,10 +192,13 @@ def run_pipeline(
             shares=risk_assessment["shares"],
             allocated_capital=risk_assessment["allocated_capital"],
             stop_loss_price=risk_assessment["stop_loss_price"],
+            strategy=strategy,
+            risk_budget=risk_assessment["risk_budget"],
         )
         return {
             "status": "DRY_RUN",
             "regime": current_regime,
+            "strategy": strategy,
             "vectorbt_validation": vbt_report,
             "trade_signal": signal.dict(),
             "risk_allocation": risk_assessment,
@@ -163,6 +218,8 @@ def run_pipeline(
         ticker=payload.ticker,
         shares=risk_assessment["shares"],
         side=signal.direction,
+        stop_loss_price=risk_assessment["stop_loss_price"],
+        take_profit_price=risk_assessment["take_profit_price"],
     )
 
     journal = _journal_trade(
@@ -170,15 +227,19 @@ def run_pipeline(
         payload=payload,
         signal=signal,
         regime=current_regime,
-        status="EXECUTED" if execution_result.get("success") else "REJECTED",
+        status="PAPER_SUBMITTED" if execution_result.get("success") and execution_result.get("mode") == "PAPER_ALPACA" else ("SIMULATED" if execution_result.get("success") else "REJECTED"),
         shares=risk_assessment["shares"],
         allocated_capital=risk_assessment["allocated_capital"],
         stop_loss_price=risk_assessment["stop_loss_price"],
+        strategy=strategy,
+        risk_budget=risk_assessment["risk_budget"],
+        execution_result=execution_result,
     )
 
     return {
-        "status": "SUCCESS",
+        "status": "PAPER_SUBMITTED" if execution_result.get("mode") == "PAPER_ALPACA" else ("SIMULATED" if execution_result.get("success") else "REJECTED"),
         "regime": current_regime,
+        "strategy": strategy,
         "vectorbt_validation": vbt_report,
         "trade_signal": signal.dict(),
         "risk_allocation": risk_assessment,
